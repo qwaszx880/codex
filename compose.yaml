@@ -3,7 +3,7 @@ name: cluster-platform-local
 x-platform-env: &platform-env
   PLATFORM_DATABASE_URL: postgresql+psycopg://platform:platform@postgres:5432/platform
   PLATFORM_RABBITMQ_URL: amqp://platform:platform@rabbitmq:5672//
-  PLATFORM_OIDC_ISSUER: http://localhost:8081/realms/platform
+  PLATFORM_OIDC_ISSUER: http://${PLATFORM_PUBLIC_HOST:-localhost}:8081/realms/platform
   PLATFORM_OIDC_JWKS_URL: http://keycloak:8080/realms/platform/protocol/openid-connect/certs
   PLATFORM_OIDC_AUDIENCE: cluster-platform
   PLATFORM_MANAGEMENT_CLUSTER: local-mgmt
@@ -15,7 +15,7 @@ services:
       POSTGRES_USER: platform
       POSTGRES_PASSWORD: platform
       POSTGRES_DB: platform
-    ports: ["5432:5432"]
+    ports: ["${PLATFORM_BIND_ADDRESS:-0.0.0.0}:5432:5432"]
     volumes: [postgres-data:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U platform -d platform"]
@@ -25,7 +25,7 @@ services:
 
   adminer:
     image: adminer:4
-    ports: ["8080:8080"]
+    ports: ["${PLATFORM_BIND_ADDRESS:-0.0.0.0}:8080:8080"]
     depends_on:
       postgres: {condition: service_healthy}
 
@@ -34,7 +34,9 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: platform
       RABBITMQ_DEFAULT_PASS: platform
-    ports: ["5672:5672", "15672:15672"]
+    ports:
+      - "${PLATFORM_BIND_ADDRESS:-0.0.0.0}:5672:5672"
+      - "${PLATFORM_BIND_ADDRESS:-0.0.0.0}:15672:15672"
     volumes: [rabbitmq-data:/var/lib/rabbitmq]
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
@@ -44,12 +46,14 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
-    command: start-dev --import-realm --hostname=http://localhost:8081
+    command: >-
+      start-dev --import-realm
+      --hostname=http://${PLATFORM_PUBLIC_HOST:-localhost}:8081
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
       KC_HEALTH_ENABLED: "true"
-    ports: ["8081:8080"]
+    ports: ["${PLATFORM_BIND_ADDRESS:-0.0.0.0}:8081:8080"]
     volumes:
       - ./dev/keycloak/realm.json:/opt/keycloak/data/import/platform-realm.json:ro
 
@@ -72,7 +76,7 @@ services:
 
   api:
     build: .
-    ports: ["8000:8000"]
+    ports: ["${PLATFORM_BIND_ADDRESS:-0.0.0.0}:8000:8000"]
     environment: *platform-env
     depends_on:
       bootstrap: {condition: service_completed_successfully}
@@ -109,7 +113,7 @@ services:
   flower:
     image: mher/flower:2.0
     command: celery --broker=amqp://platform:platform@rabbitmq:5672// flower --port=5555
-    ports: ["5555:5555"]
+    ports: ["${PLATFORM_BIND_ADDRESS:-0.0.0.0}:5555:5555"]
     depends_on:
       rabbitmq: {condition: service_healthy}
 

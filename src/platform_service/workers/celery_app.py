@@ -1,3 +1,5 @@
+"""Celery transport configuration for management-cluster command routing."""
+
 from celery import Celery
 from kombu import Exchange, Queue
 
@@ -7,6 +9,8 @@ settings = get_settings()
 command_exchange = Exchange("cluster.commands", type="direct", durable=True)
 celery_app = Celery("platform", broker=settings.rabbitmq_url)
 celery_app.conf.update(
+    # A task is acknowledged only after processing; ProcessedEvent makes a
+    # redelivery after worker loss safe at the application boundary.
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,

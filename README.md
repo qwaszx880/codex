@@ -22,6 +22,8 @@ and tests can run through Docker Compose.
 - [Compose-only local development](#compose-only-local-development)
 - [Local failure testing](#local-failure-testing)
 - [Production boundaries](#production-boundaries)
+- [Canonical project goals and alignment review](docs/project-goals/README.md)
+- [Python code walkthrough](docs/code-walkthrough/README.md)
 
 ## Architecture
 
@@ -70,17 +72,17 @@ fake adapter implementing that same boundary.
 
 | Service | Responsibility | Host access |
 |---|---|---|
-| `postgres` | Authoritative platform database | `localhost:5432` |
-| `adminer` | Browser UI for PostgreSQL | <http://localhost:8080> |
-| `rabbitmq` | Celery command transport and management UI | AMQP `:5672`, UI <http://localhost:15672> |
-| `keycloak` | Local OIDC issuer and administration UI | <http://localhost:8081> |
+| `postgres` | Authoritative platform database | `<PLATFORM_PUBLIC_HOST>:5432` |
+| `adminer` | Browser UI for PostgreSQL | `http://<PLATFORM_PUBLIC_HOST>:8080` |
+| `rabbitmq` | Celery command transport and management UI | AMQP `:5672`, UI `http://<PLATFORM_PUBLIC_HOST>:15672` |
+| `keycloak` | Local OIDC issuer and administration UI | `http://<PLATFORM_PUBLIC_HOST>:8081` |
 | `migrate` | One-shot Alembic schema migration | no host port |
 | `bootstrap` | One-shot idempotent local tenant/IAM seed | no host port |
-| `api` | FastAPI control-plane and Prometheus endpoint | <http://localhost:8000> |
+| `api` | FastAPI control-plane and Prometheus endpoint | `http://<PLATFORM_PUBLIC_HOST>:8000` |
 | `outbox` | Relays committed outbox rows to Celery/RabbitMQ | no host port |
 | `executor` | Consumes commands, takes leases, compiles and applies resources | scalable, no host port |
 | `fake-observer` | Simulates CAPI/CAPO observations and convergence | no host port |
-| `flower` | Browser UI for Celery workers and tasks | <http://localhost:5555> |
+| `flower` | Browser UI for Celery workers and tasks | `http://<PLATFORM_PUBLIC_HOST>:5555` |
 
 ### Browser UI credentials
 
@@ -268,7 +270,7 @@ when absent and records it with operations/audit events.
 | `GET` | `/healthz` | none | Process liveness response |
 | `GET` | `/metrics` | none in local setup | Prometheus-formatted application metrics endpoint |
 
-OpenAPI is available at <http://localhost:8000/docs>. The currently implemented
+OpenAPI is available at `http://<PLATFORM_PUBLIC_HOST>:8000/docs`. The currently implemented
 mutation surface is create, scale, and upgrade. General patch and asynchronous delete
 remain explicit follow-up work rather than silently pretending to be supported.
 
@@ -458,9 +460,35 @@ not required. `curl` is useful for API examples; `jq` is optional.
 
 ### 1. Start everything
 
-From the repository root:
+Compose publishes interfaces on `PLATFORM_BIND_ADDRESS` and uses
+`PLATFORM_PUBLIC_HOST` in browser-visible URLs and the OIDC issuer. For development on
+the same machine, the defaults are `0.0.0.0` and `localhost`. When Compose runs on a
+VM, copy the example environment and set the public host to the VM address that your
+browser can reach:
 
 ```bash
+cp .env.example .env
+# Edit .env, for example:
+# PLATFORM_PUBLIC_HOST=192.0.2.10
+# PLATFORM_BIND_ADDRESS=0.0.0.0
+# PLATFORM_OIDC_ISSUER=http://192.0.2.10:8081/realms/platform
+# PLATFORM_OIDC_JWKS_URL=http://192.0.2.10:8081/realms/platform/protocol/openid-connect/certs
+```
+
+`PLATFORM_PUBLIC_HOST` must be a host or IP without a URL scheme or port. Allow TCP
+ports `8000`, `8080`, `8081`, `5555`, and `15672` through the VM and host firewalls as
+needed. Ports `5432` and `5672` are also published for development tools; restrict
+`PLATFORM_BIND_ADDRESS` or firewall access when those services should not be reachable
+remotely. These local credentials and the permissive local Keycloak redirect settings
+are for development only and must never be exposed to an untrusted network.
+
+From the repository root, load the same public host into the example shell commands
+and start the stack:
+
+```bash
+set -a; . ./.env; set +a
+PLATFORM_URL="http://${PLATFORM_PUBLIC_HOST}:8000"
+OIDC_URL="http://${PLATFORM_PUBLIC_HOST}:8081"
 docker compose up --build -d
 docker compose ps
 ```
@@ -483,7 +511,7 @@ The imported user is `developer` with password `developer`:
 
 ```bash
 TOKEN=$(curl -fsS -X POST \
-  http://localhost:8081/realms/platform/protocol/openid-connect/token \
+  "$OIDC_URL/realms/platform/protocol/openid-connect/token" \
   -H 'content-type: application/x-www-form-urlencoded' \
   -d grant_type=password \
   -d client_id=cluster-platform \
@@ -510,7 +538,7 @@ The seeded IDs are stable:
 ### 3. Create and inspect a simulated cluster
 
 ```bash
-OPERATION=$(curl -fsS http://localhost:8000/v1/clusters \
+OPERATION=$(curl -fsS "$PLATFORM_URL/v1/clusters" \
   -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
   -H 'X-Request-ID: local-create-demo' \
@@ -533,11 +561,11 @@ Copy `cluster_id` from the response into `CLUSTER_ID`, wait a few seconds, then 
 ```bash
 CLUSTER_ID=<cluster UUID from the response>
 curl -fsS -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8000/v1/clusters/$CLUSTER_ID/operations"
+  "$PLATFORM_URL/v1/clusters/$CLUSTER_ID/operations"
 curl -fsS -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8000/v1/clusters/$CLUSTER_ID/health"
+  "$PLATFORM_URL/v1/clusters/$CLUSTER_ID/health"
 curl -fsS -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8000/v1/clusters/$CLUSTER_ID/resources"
+  "$PLATFORM_URL/v1/clusters/$CLUSTER_ID/resources"
 ```
 
 The create endpoint actually returns an operation model containing `cluster_id`, so no
@@ -546,11 +574,11 @@ additional parsing endpoint is needed.
 ### 4. Scale or upgrade
 
 ```bash
-curl -fsS -X POST "http://localhost:8000/v1/clusters/$CLUSTER_ID/scale" \
+curl -fsS -X POST "$PLATFORM_URL/v1/clusters/$CLUSTER_ID/scale" \
   -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"pool":"workers","replicas":5}'
 
-curl -fsS -X POST "http://localhost:8000/v1/clusters/$CLUSTER_ID/upgrade" \
+curl -fsS -X POST "$PLATFORM_URL/v1/clusters/$CLUSTER_ID/upgrade" \
   -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"version":"v1.32.0"}'
 ```
