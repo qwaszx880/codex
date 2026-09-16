@@ -42,7 +42,9 @@ def observe_once() -> int:
     failure = os.getenv("FAKE_CAPI_FAILURE", "").lower() in {"1", "true", "yes"}
     with SessionLocal.begin() as session:
         operations = session.scalars(
-            select(Operation).where(Operation.state == "RECONCILING").with_for_update(skip_locked=True)
+            select(Operation)
+            .where(Operation.state == "RECONCILING")
+            .with_for_update(skip_locked=True)
         ).all()
         for operation in operations:
             cluster = session.get(Cluster, operation.cluster_id)
@@ -59,19 +61,36 @@ def observe_once() -> int:
                 resources.append(
                     {
                         "kind": "MachineSet",
-                        "metadata": {"name": f"{cluster.name}-{pool.name}-set", "namespace": project.namespace},
+                        "metadata": {
+                            "name": f"{cluster.name}-{pool.name}-set",
+                            "namespace": project.namespace,
+                        },
                     }
                 )
                 for index in range(pool.replicas):
                     resources.extend(
                         [
-                            {"kind": "Machine", "metadata": {"name": f"{cluster.name}-{pool.name}-{index}", "namespace": project.namespace}},
-                            {"kind": "OpenStackMachine", "metadata": {"name": f"{cluster.name}-{pool.name}-{index}", "namespace": project.namespace}},
+                            {
+                                "kind": "Machine",
+                                "metadata": {
+                                    "name": f"{cluster.name}-{pool.name}-{index}",
+                                    "namespace": project.namespace,
+                                },
+                            },
+                            {
+                                "kind": "OpenStackMachine",
+                                "metadata": {
+                                    "name": f"{cluster.name}-{pool.name}-{index}",
+                                    "namespace": project.namespace,
+                                },
+                            },
                         ]
                     )
             for resource in resources:
                 metadata = resource["metadata"]
-                uid = str(uuid5(NAMESPACE_URL, f"{cluster.id}/{resource['kind']}/{metadata['name']}"))
+                uid = str(
+                    uuid5(NAMESPACE_URL, f"{cluster.id}/{resource['kind']}/{metadata['name']}")
+                )
                 condition = _condition(resource["kind"], failure)
                 status = session.scalar(select(ResourceStatus).where(ResourceStatus.uid == uid))
                 if status is None:
@@ -132,7 +151,9 @@ def observe_once() -> int:
             cluster.observed_revision = operation.target_revision
             operation.state = "FAILED" if failure else "SUCCEEDED"
             operation.completed_at = datetime.now(timezone.utc)
-            operation.failure = {"classification": "PERMANENT", "reason": "SimulatedFailure"} if failure else None
+            operation.failure = (
+                {"classification": "PERMANENT", "reason": "SimulatedFailure"} if failure else None
+            )
             session.add(
                 OperationStage(
                     operation_id=operation.id,
