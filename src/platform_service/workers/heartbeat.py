@@ -1,3 +1,5 @@
+"""Periodic executor presence and compatibility reporting for the local stack."""
+
 import os
 import socket
 import time
@@ -6,7 +8,11 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from platform_service.config import get_settings
-from platform_service.infrastructure.database import ExecutorInstance, ManagementCluster, SessionLocal
+from platform_service.infrastructure.database import (
+    ExecutorInstance,
+    ManagementCluster,
+    SessionLocal,
+)
 
 
 def beat() -> None:

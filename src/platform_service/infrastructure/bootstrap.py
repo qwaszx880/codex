@@ -103,9 +103,13 @@ def seed() -> None:
             session.add(role)
         session.flush()
         for permission_name in PERMISSIONS:
-            permission = session.scalar(select(Permission).where(Permission.name == permission_name))
+            permission = session.scalar(
+                select(Permission).where(Permission.name == permission_name)
+            )
             if permission is None:
-                permission = Permission(name=permission_name, description="Local built-in permission")
+                permission = Permission(
+                    name=permission_name, description="Local built-in permission"
+                )
                 session.add(permission)
                 session.flush()
             if session.get(RolePermission, (role.id, permission.id)) is None:
