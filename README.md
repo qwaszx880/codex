@@ -22,6 +22,7 @@ and tests can run through Docker Compose.
 - [Compose-only local development](#compose-only-local-development)
 - [Local failure testing](#local-failure-testing)
 - [Production boundaries](#production-boundaries)
+- [Canonical project goals and alignment review](docs/project-goals/README.md)
 
 ## Architecture
 
