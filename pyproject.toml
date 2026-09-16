@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cluster-control-plane"
+version = "0.1.0"
+description = "Tenant-aware CAPI/CAPO control plane"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1", "uvicorn[standard]>=0.30,<1", "sqlalchemy>=2.0,<3",
+  "psycopg[binary]>=3.2,<4", "pydantic-settings>=2.5,<3", "pyjwt[crypto]>=2.9,<3",
+  "celery>=5.4,<6", "kombu>=5.4,<6", "alembic>=1.13,<2", "httpx>=0.27,<1",
+  "prometheus-client>=0.21,<1", "structlog>=24.4,<26"
+]
+[project.optional-dependencies]
+dev = ["pytest>=8.3,<9", "ruff>=0.7,<1"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/platform_service"]
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+[tool.ruff.lint]
+ignore = ["E501", "E701", "E702"]
