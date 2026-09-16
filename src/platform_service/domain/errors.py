@@ -1,3 +1,5 @@
+"""Transport-independent reconciliation failure classifications."""
+
 from enum import StrEnum
 
 

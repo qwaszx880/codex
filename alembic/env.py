@@ -1,3 +1,5 @@
+"""Alembic runtime configuration using the application's SQLAlchemy metadata."""
+
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context

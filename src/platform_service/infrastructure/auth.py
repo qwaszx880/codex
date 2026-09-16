@@ -1,3 +1,5 @@
+"""FastAPI dependencies for OIDC authentication and project authorization lookup."""
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID

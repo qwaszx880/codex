@@ -1,3 +1,5 @@
+"""Replaceable repository, provider, messaging, metrics, and secret-store ports."""
+
 from abc import ABC, abstractmethod
 from typing import Any, Protocol
 from uuid import UUID

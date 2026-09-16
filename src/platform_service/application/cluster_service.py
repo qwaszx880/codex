@@ -1,3 +1,5 @@
+"""Transactional application use cases for cluster desired-state mutations."""
+
 from copy import deepcopy
 from uuid import UUID
 

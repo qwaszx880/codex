@@ -1,3 +1,5 @@
+"""Stable provider-neutral desired-state contract accepted by the platform API."""
+
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator

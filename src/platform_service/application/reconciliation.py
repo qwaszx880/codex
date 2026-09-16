@@ -1,3 +1,5 @@
+"""Executor-side orchestration for safely applying one durable cluster command."""
+
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 

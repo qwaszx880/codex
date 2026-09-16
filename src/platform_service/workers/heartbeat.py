@@ -1,3 +1,5 @@
+"""Periodic executor presence and compatibility reporting for the local stack."""
+
 import os
 import socket
 import time

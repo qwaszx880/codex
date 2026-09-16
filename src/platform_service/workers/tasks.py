@@ -1,3 +1,5 @@
+"""Celery entry points and local management-adapter wiring."""
+
 import os
 
 from platform_service.application.reconciliation import CommandProcessor

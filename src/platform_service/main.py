@@ -1,3 +1,5 @@
+"""FastAPI composition root for HTTP routes and process-level endpoints."""
+
 from fastapi import FastAPI
 from prometheus_client import make_asgi_app
 

@@ -1,3 +1,5 @@
+"""SQLAlchemy mappings for authoritative intent, delivery, and observed state."""
+
 from datetime import datetime
 from uuid import UUID, uuid4
 

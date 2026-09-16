@@ -23,6 +23,7 @@ and tests can run through Docker Compose.
 - [Local failure testing](#local-failure-testing)
 - [Production boundaries](#production-boundaries)
 - [Canonical project goals and alignment review](docs/project-goals/README.md)
+- [Python code walkthrough](docs/code-walkthrough/README.md)
 
 ## Architecture
 

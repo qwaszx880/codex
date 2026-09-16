@@ -1,3 +1,5 @@
+"""HTTP request and response models exposed by the FastAPI adapter."""
+
 from datetime import datetime
 from uuid import UUID
 

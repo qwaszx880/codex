@@ -1,3 +1,5 @@
+"""Pure CAPO resource compiler for the provider-neutral cluster specification."""
+
 from typing import Any
 
 from platform_service.domain.ports import ClusterCompiler
