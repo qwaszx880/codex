@@ -20,6 +20,18 @@ def test_local_oidc_identity_matches_seeded_principal_and_has_api_audience():
     )
 
 
+def test_compose_supports_a_public_vm_host_and_configurable_bind_address():
+    compose = Path("compose.yaml").read_text()
+    realm = json.loads(Path("dev/keycloak/realm.json").read_text())
+    client = next(client for client in realm["clients"] if client["clientId"] == "cluster-platform")
+
+    assert "http://${PLATFORM_PUBLIC_HOST:-localhost}:8081/realms/platform" in compose
+    assert "--hostname=http://${PLATFORM_PUBLIC_HOST:-localhost}:8081" in compose
+    assert compose.count("${PLATFORM_BIND_ADDRESS:-0.0.0.0}:") == 7
+    assert client["redirectUris"] == ["*"]
+    assert client["webOrigins"] == ["*"]
+
+
 def test_fake_observer_emits_success_and_failure_conditions():
     ready = _condition("Cluster", failed=False)
     failed = _condition("OpenStackCluster", failed=True)

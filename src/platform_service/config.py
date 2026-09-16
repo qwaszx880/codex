@@ -1,5 +1,9 @@
+"""Environment-backed settings shared by API, publisher, and worker processes."""
+
 from functools import lru_cache
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="PLATFORM_", env_file=".env", extra="ignore")
@@ -12,6 +16,9 @@ class Settings(BaseSettings):
     outbox_batch_size: int = 100
     management_cluster: str = "local-mgmt"
 
+
 @lru_cache
 def get_settings() -> Settings:
+    """Return one immutable-by-convention settings snapshot per process."""
+
     return Settings()
