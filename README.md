@@ -24,6 +24,7 @@ and tests can run through Docker Compose.
 - [Production boundaries](#production-boundaries)
 - [Canonical project goals and alignment review](docs/project-goals/README.md)
 - [Python code walkthrough](docs/code-walkthrough/README.md)
+- [Hands-on FastAPI and Python guide](docs/fastapi-guide/README.md)
 - [Fake executor guide](docs/fake-executor/README.md)
 - [Fake observer guide](docs/fake-observer/README.md)
 
