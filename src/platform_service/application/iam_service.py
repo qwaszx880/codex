@@ -126,6 +126,13 @@ class IamService:
         ).all()
         return [(role, self.role_permissions(role.id)) for role in roles]
 
+    def organization_roles(self, permissions: set[str]) -> list[tuple[Role, list[str]]]:
+        self._authorize(permissions)
+        roles = self.session.scalars(
+            select(Role).where(Role.scope == "organization").order_by(Role.name)
+        ).all()
+        return [(role, self.role_permissions(role.id)) for role in roles]
+
     def role_permissions(self, role_id: UUID) -> list[str]:
         return list(
             self.session.scalars(

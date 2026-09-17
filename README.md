@@ -18,6 +18,8 @@ and tests can run through Docker Compose.
 - [Desired and observed state](#desired-and-observed-state)
 - [API](#api)
 - [Database model](#database-model)
+- [Detailed database schema and frontend polling guide](docs/database-schema/README.md)
+- [IAM, tenancy, and authorization guide](docs/iam/README.md)
 - [Repository layout](#repository-layout)
 - [Compose-only local development](#compose-only-local-development)
 - [Local failure testing](#local-failure-testing)
@@ -191,6 +193,10 @@ persisted principal IDs and never store passwords or bearer tokens.
 Membership changes and their security audit event commit in the same database
 transaction and retain the actor, target principal, role, project, and request ID.
 
+For the complete supported IAM API, role inheritance rules, administration examples,
+security boundaries, and known limitations, see the
+[IAM, tenancy, and authorization guide](docs/iam/README.md).
+
 ### Mutation and dispatch flow
 
 ```text
@@ -281,14 +287,29 @@ when absent and records it with operations/audit events.
 | Method | Path | Permission | Behavior |
 |---|---|---|---|
 | `GET` | `/v1/principals/me` | authenticated | Read the current OIDC-backed platform principal |
+| `GET` | `/v1/organizations` | authenticated | List organizations where the caller has an organization role |
+| `GET` | `/v1/organizations/{organization_id}/roles` | organization `project.admin` | List organization roles available for principal provisioning |
+| `GET/POST` | `/v1/organizations/{organization_id}/principals` | organization `project.admin` | List identity mappings or provision one with an initial organization role (`201`) |
+| `PATCH` | `/v1/organizations/{organization_id}/principals/{principal_id}` | organization `project.admin` | Update a mapped principal's profile or enabled state |
+| `GET/POST` | `/v1/organizations/{organization_id}/projects` | organization `project.admin` | List all organization projects or create one (`201`) |
 | `GET` | `/v1/projects` | authenticated | List projects visible through direct or organization membership |
+| `PATCH` | `/v1/projects/{project_id}` | `project.admin` | Change a project's name or enabled state |
 | `GET` | `/v1/projects/{project_id}/roles` | `project.admin` | List assignable project roles and grants |
 | `GET` | `/v1/projects/{project_id}/members` | `project.admin` | List project principals and role assignments |
 | `POST` | `/v1/projects/{project_id}/members` | `project.admin` | Assign a project role to an enabled principal (`201`) |
 | `DELETE` | `/v1/projects/{project_id}/members/{principal_id}/roles/{role_id}` | `project.admin` | Remove one project role assignment (`204`) |
+| `GET/POST` | `/v1/projects/{project_id}/provider-references` | `cluster.read` / `provider.configure` | List safe provider metadata or create a secret reference (`201`) |
+| `PATCH/DELETE` | `/v1/projects/{project_id}/provider-references/{reference_id}` | `provider.configure` | Update or delete an unused provider reference |
+| `GET/POST` | `/v1/projects/{project_id}/node-profiles` | `cluster.read` / `provider.configure` | List or create reusable machine profiles (`201`) |
+| `PUT/DELETE` | `/v1/projects/{project_id}/node-profiles/{profile_id}` | `provider.configure` | Replace or delete a machine profile |
+| `GET` | `/v1/management-clusters` | authenticated | List enabled cluster placement targets |
 | `POST` | `/v1/clusters` | `cluster.create` | Create revision 1 and return an accepted operation (`202`) |
 | `GET` | `/v1/clusters?project_id={uuid}` | `cluster.read` | List non-deleted project clusters |
 | `GET` | `/v1/clusters/{cluster_id}` | `cluster.read` | Read revision pointers and cluster metadata |
+| `PATCH` | `/v1/clusters/{cluster_id}` | `cluster.update` | Replace desired `ClusterSpec` in a new revision (`202`) |
+| `DELETE` | `/v1/clusters/{cluster_id}` | `cluster.delete` | Reconcile deletion and retain a tombstone/history (`202`) |
+| `POST` | `/v1/clusters/{cluster_id}/worker-node-types` | `cluster.update` | Add a worker node type in a new revision (`202`) |
+| `PUT/DELETE` | `/v1/clusters/{cluster_id}/worker-node-types/{name}` | `cluster.update` | Replace or remove a worker node type in a new revision (`202`) |
 | `POST` | `/v1/clusters/{cluster_id}/scale` | `cluster.scale` | Change one worker-node-type replica count in a new revision (`202`) |
 | `POST` | `/v1/clusters/{cluster_id}/upgrade` | `cluster.upgrade` | Change Kubernetes version in a new revision (`202`) |
 | `GET` | `/v1/clusters/{cluster_id}/revisions` | `cluster.read` | Return immutable desired-state history |
@@ -300,9 +321,17 @@ when absent and records it with operations/audit events.
 | `GET` | `/healthz` | none | Process liveness response |
 | `GET` | `/metrics` | none in local setup | Prometheus-formatted application metrics endpoint |
 
-OpenAPI is available at `http://<PLATFORM_PUBLIC_HOST>:8000/docs`. The currently implemented
-mutation surface is create, scale, and upgrade. General patch and asynchronous delete
-remain explicit follow-up work rather than silently pretending to be supported.
+OpenAPI is available at `http://<PLATFORM_PUBLIC_HOST>:8000/docs`. Cluster create,
+full-spec update, worker-node-type changes, scale, upgrade, and delete are asynchronous;
+they return an operation that clients poll. Tenant metadata administration is a short
+database transaction and returns `200`, `201`, or `204` directly.
+
+Creating a principal provisions only the platform mapping for an existing external
+OIDC identity and its initial organization role. It never creates an identity-provider
+password or returns identity-provider credentials. Provider-reference responses
+similarly omit `secret_reference` even though authorized creation/update requests can
+set that opaque pointer. Provider configuration rejects common raw credential keys at
+any nesting level; credentials belong behind `secret_reference`.
 
 ### API response and error semantics
 
@@ -315,7 +344,9 @@ Mutation endpoints return `202 Accepted` with an operation, not a finished clust
   "kind": "CREATE",
   "state": "ACCEPTED",
   "target_revision": 1,
-  "created_at": "2026-09-16T12:00:00Z"
+  "created_at": "2026-09-16T12:00:00Z",
+  "completed_at": null,
+  "failure": null
 }
 ```
 
@@ -327,7 +358,7 @@ Common responses:
 
 | Status | Meaning | Typical cause |
 |---|---|---|
-| `202` | intent accepted asynchronously | create, scale, or upgrade transaction committed |
+| `202` | intent accepted asynchronously | cluster create, update, worker-node-type change, scale, upgrade, or delete committed |
 | `401` | token invalid | bad signature, issuer, audience, expiry, or missing bearer token |
 | `403` | authenticated but forbidden | disabled principal or missing project permission |
 | `404` | tenant-visible object missing | unknown cluster, project, management target, or worker node type |
@@ -407,6 +438,10 @@ time series. The mappings currently live together in `infrastructure/database.py
 repositories are represented as ports so persistence can be split without changing
 domain use cases.
 
+For the maintainable Mermaid entity-relationship diagram, field-level reference,
+code-to-table map, and a browser polling example, see the
+[database schema and frontend status guide](docs/database-schema/README.md).
+
 | Area | Tables/models | Purpose |
 |---|---|---|
 | IAM | `principals`, `roles`, `permissions`, `role_permissions` | External identity mapping and extensible permissions |
@@ -463,6 +498,7 @@ in provider configuration, audit details, API responses, or ordinary application
 │   │   ├── ports.py             # replaceable repository/provider/metrics/secret ports
 │   │   └── errors.py            # reconciliation error classifications
 │   ├── application/
+│   │   ├── admin_service.py     # audited tenant/provider metadata administration
 │   │   ├── cluster_service.py   # transactional intent and revision use cases
 │   │   ├── errors.py            # expected application failure vocabulary
 │   │   ├── iam_service.py       # project membership and RBAC use cases
@@ -479,6 +515,8 @@ in provider configuration, audit details, API responses, or ordinary application
 │       ├── fake_observer.py     # local CAPI/CAPO simulation
 │       └── heartbeat.py         # executor presence/version reporting
 └── tests/
+    ├── test_admin_service.py
+    ├── test_cluster_service.py
     ├── test_iam.py
     ├── test_spec.py
     ├── test_compiler.py
@@ -500,7 +538,8 @@ routes and Celery task functions.
 | `domain/spec.py` | stable provider-neutral desired-state model and invariants | CAPO manifest details |
 | `domain/ports.py` | replaceable boundary protocols | concrete SQLAlchemy/Kubernetes clients |
 | `domain/errors.py` | shared retry/error classification vocabulary | transport-specific retry loops |
-| `application/cluster_service.py` | create/revise/scale use cases and atomic intent | HTTP or Celery framework code |
+| `application/admin_service.py` | audited principal, project, provider reference, and node-profile mutations | identity-provider passwords or async cluster work |
+| `application/cluster_service.py` | revisioned cluster create/update/delete/scale/upgrade use cases and atomic intent | HTTP or Celery framework code |
 | `application/iam_service.py` | project membership and visible-project RBAC use cases | token verification or HTTP serialization |
 | `application/reconciliation.py` | idempotency, staleness, lease and command orchestration | long-running observer loops |
 | `infrastructure/database.py` | SQLAlchemy persistence mappings and session factory | API serialization |
@@ -661,7 +700,7 @@ curl -fsS -H "Authorization: Bearer $TOKEN" \
 The create endpoint actually returns an operation model containing `cluster_id`, so no
 additional parsing endpoint is needed.
 
-### 4. Scale or upgrade
+### 4. Modify or delete a cluster
 
 ```bash
 curl -fsS -X POST "$PLATFORM_URL/v1/clusters/$CLUSTER_ID/scale" \
@@ -671,7 +710,17 @@ curl -fsS -X POST "$PLATFORM_URL/v1/clusters/$CLUSTER_ID/scale" \
 curl -fsS -X POST "$PLATFORM_URL/v1/clusters/$CLUSTER_ID/upgrade" \
   -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"version":"v1.32.0"}'
+
+curl -fsS -X POST "$PLATFORM_URL/v1/clusters/$CLUSTER_ID/worker-node-types" \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"worker_node_type":{"name":"batch","replicas":2,"node_profile":"compute"}}'
+
+curl -fsS -X DELETE "$PLATFORM_URL/v1/clusters/$CLUSTER_ID" \
+  -H "Authorization: Bearer $TOKEN"
 ```
+
+Each response is an operation. Poll `/v1/operations/{operation_id}` as described in the
+[frontend status guide](docs/database-schema/README.md#frontend-polling-follow-an-executed-task).
 
 Each call creates a new revision and operation. Watch it move through RabbitMQ and
 Celery in the RabbitMQ and Flower UIs, then inspect revisions and conditions via API.

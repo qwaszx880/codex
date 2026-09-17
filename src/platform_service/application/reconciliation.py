@@ -82,30 +82,33 @@ class CommandProcessor:
             )
         )
         project = self.session.get(Project, cluster.project_id)
-        provider = self.session.get(ProviderReference, cluster.provider_reference_id)
-        desired_spec = ClusterSpec.model_validate(rev.spec)
-        profile_names = {
-            desired_spec.control_plane.node_profile,
-            *(pool.node_profile for pool in desired_spec.worker_node_types),
-        }
-        profiles = self.session.scalars(
-            select(NodeProfile).where(
-                NodeProfile.project_id == cluster.project_id,
-                NodeProfile.provider_reference_id == cluster.provider_reference_id,
-                NodeProfile.name.in_(profile_names),
+        if op.kind == "DELETE":
+            self.adapter.delete(project.namespace, cluster.name)
+        else:
+            provider = self.session.get(ProviderReference, cluster.provider_reference_id)
+            desired_spec = ClusterSpec.model_validate(rev.spec)
+            profile_names = {
+                desired_spec.control_plane.node_profile,
+                *(pool.node_profile for pool in desired_spec.worker_node_types),
+            }
+            profiles = self.session.scalars(
+                select(NodeProfile).where(
+                    NodeProfile.project_id == cluster.project_id,
+                    NodeProfile.provider_reference_id == cluster.provider_reference_id,
+                    NodeProfile.name.in_(profile_names),
+                )
+            ).all()
+            self.adapter.apply(
+                self.compiler.compile(
+                    cluster.name,
+                    project.namespace,
+                    desired_spec,
+                    CompilationContext(
+                        provider=provider.configuration,
+                        node_profiles={profile.name: profile.specification for profile in profiles},
+                    ),
+                )
             )
-        ).all()
-        self.adapter.apply(
-            self.compiler.compile(
-                cluster.name,
-                project.namespace,
-                desired_spec,
-                CompilationContext(
-                    provider=provider.configuration,
-                    node_profiles={profile.name: profile.specification for profile in profiles},
-                ),
-            )
-        )
         cluster.applied_revision = target
         self.session.add(
             ProcessedEvent(event_id=event_id, operation_id=operation_id, target_revision=target)

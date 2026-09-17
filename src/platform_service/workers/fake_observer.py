@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid5
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from platform_service.domain.ports import CompilationContext
 from platform_service.domain.spec import ClusterSpec
@@ -59,6 +59,62 @@ def observe_once() -> int:
         for operation in operations:
             cluster = session.get(Cluster, operation.cluster_id)
             project = session.get(Project, cluster.project_id)
+            if operation.kind == "DELETE":
+                if failure:
+                    operation.state = "FAILED"
+                    operation.completed_at = datetime.now(timezone.utc)
+                    operation.failure = {
+                        "classification": "PERMANENT",
+                        "reason": "SimulatedFailure",
+                    }
+                    session.add(
+                        OperationStage(
+                            operation_id=operation.id,
+                            name="deletion",
+                            state="FAILED",
+                            started_at=operation.created_at,
+                            completed_at=datetime.now(timezone.utc),
+                            reason="SimulatedFailure",
+                            message="local fake management plane deletion failed",
+                            related_resource={"kind": "Cluster", "name": cluster.name},
+                            retry_count=0,
+                            failure=operation.failure,
+                        )
+                    )
+                    continue
+                resource_ids = select(ResourceStatus.id).where(
+                    ResourceStatus.cluster_id == cluster.id
+                )
+                session.execute(
+                    delete(ConditionHistory).where(
+                        ConditionHistory.resource_status_id.in_(resource_ids)
+                    )
+                )
+                session.execute(
+                    delete(ResourceStatus).where(ResourceStatus.cluster_id == cluster.id)
+                )
+                status = session.get(ClusterStatus, cluster.id)
+                if status is not None:
+                    session.delete(status)
+                cluster.observed_revision = operation.target_revision
+                cluster.deleted_at = datetime.now(timezone.utc)
+                operation.state = "SUCCEEDED"
+                operation.completed_at = datetime.now(timezone.utc)
+                operation.failure = None
+                session.add(
+                    OperationStage(
+                        operation_id=operation.id,
+                        name="deletion",
+                        state="SUCCEEDED",
+                        started_at=operation.created_at,
+                        completed_at=datetime.now(timezone.utc),
+                        reason="Deleted",
+                        message="local fake management plane deletion",
+                        related_resource={"kind": "Cluster", "name": cluster.name},
+                        retry_count=0,
+                    )
+                )
+                continue
             revision = session.scalar(
                 select(ClusterRevision).where(
                     ClusterRevision.cluster_id == cluster.id,

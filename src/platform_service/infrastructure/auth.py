@@ -124,3 +124,31 @@ def require_project_permission(
     if permission not in permissions:
         raise HTTPException(403, f"missing permission: {permission}")
     return permissions
+
+
+def organization_permissions(
+    session: Session, principal_id: UUID, organization_id: UUID
+) -> set[str]:
+    """Resolve only organization-scoped grants for tenant administration."""
+
+    statement = (
+        select(Permission.name)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .join(OrganizationMembership, OrganizationMembership.role_id == RolePermission.role_id)
+        .join(Role, Role.id == OrganizationMembership.role_id)
+        .where(
+            OrganizationMembership.principal_id == principal_id,
+            OrganizationMembership.organization_id == organization_id,
+            Role.scope == "organization",
+        )
+    )
+    return set(session.scalars(statement))
+
+
+def require_organization_permission(
+    session: Session, principal_id: UUID, organization_id: UUID, permission: str
+) -> set[str]:
+    permissions = organization_permissions(session, principal_id, organization_id)
+    if permission not in permissions:
+        raise HTTPException(403, f"missing permission: {permission}")
+    return permissions

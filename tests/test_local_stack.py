@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from platform_service.infrastructure.bootstrap import IDS, PERMISSIONS
+from platform_service.main import app
 from platform_service.workers.fake_observer import _condition
 
 
@@ -68,3 +69,19 @@ def test_fake_observer_emits_success_and_failure_conditions():
     assert ready["reason"] == "Reconciled"
     assert failed["status"] == "False"
     assert failed["reason"] == "SimulatedFailure"
+
+
+def test_openapi_exposes_administration_and_async_cluster_mutations():
+    paths = app.openapi()["paths"]
+
+    assert paths["/v1/organizations/{organization_id}/principals"]["post"]["responses"]["201"]
+    assert paths["/v1/organizations/{organization_id}/roles"]["get"]["responses"]["200"]
+    assert paths["/v1/organizations/{organization_id}/projects"]["post"]["responses"]["201"]
+    assert paths["/v1/projects/{project_id}/provider-references"]["post"]["responses"]["201"]
+    assert paths["/v1/projects/{project_id}/node-profiles"]["post"]["responses"]["201"]
+    assert paths["/v1/clusters/{cluster_id}"]["patch"]["responses"]["202"]
+    assert paths["/v1/clusters/{cluster_id}"]["delete"]["responses"]["202"]
+    assert paths["/v1/clusters/{cluster_id}/worker-node-types"]["post"]["responses"]["202"]
+
+    provider_fields = app.openapi()["components"]["schemas"]["ProviderReferenceView"]["properties"]
+    assert "secret_reference" not in provider_fields

@@ -26,10 +26,11 @@ different timelines, even though the local simulation usually converges in secon
 2. Select every operation whose current state is `RECONCILING`, using
    `FOR UPDATE SKIP LOCKED`. Locked rows are skipped, so concurrent observer processes
    do not handle the same operation at the same time.
-3. Load the operation's cluster, project, exact target revision, provider reference,
-   and all node profiles belonging to that project/provider pair.
-4. Validate the stored revision as `ClusterSpec` and run `CapoCompiler` with the same
-   provider/profile context used by the command processor.
+3. For a successful deletion, remove the simulated observations and normalized health,
+   set the cluster tombstone, advance `observed_revision`, and complete a `deletion`
+   stage. In failure mode, retain the cluster/observations and fail that stage.
+4. For other operations, load the exact target revision, provider reference, and node
+   profiles, validate `ClusterSpec`, and run `CapoCompiler` with the executor's context.
 5. Add simulated resources that CAPI would normally create from the compiled worker
    declarations.
 6. Upsert the current resource snapshot, normalized cluster health, revision pointer,
@@ -79,6 +80,9 @@ For an existing resource, it replaces the latest conditions and raw status and r
 `observed_at`. It currently does **not** append a new condition-history row, increment
 generation/resource version, or delete status rows for resources absent from a later
 revision. Those are explicit simulation limitations, not production observer behavior.
+An explicit cluster deletion is different: it removes condition history before resource
+rows, removes normalized health, and retains the cluster, revisions, operation, audit,
+and outbox history behind a `deleted_at` tombstone.
 
 The cluster-level projection is independent of those raw rows:
 
