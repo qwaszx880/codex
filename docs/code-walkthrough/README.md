@@ -11,6 +11,8 @@ and guidance for polling asynchronous operations from a frontend, see the
 [database schema and frontend status guide](../database-schema/README.md).
 For authentication, role inheritance, tenant administration flows, and the precise IAM
 feature boundary, see the [IAM guide](../iam/README.md).
+For the complete HTTP endpoint inventory, request summary, status codes, and polling
+contract, see the [API reference](../api-reference/README.md).
 
 ## Start here
 

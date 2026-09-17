@@ -143,6 +143,9 @@ items are not claims of production readiness.
 
 ## Lifecycle and API
 
+The [API reference](../api-reference/README.md) distinguishes the routes implemented
+today from the nodes, audit-read, and workload-metrics routes that remain goals below.
+
 56. **Cluster CRUD.** Support create, read, update, and asynchronous delete.
 57. **Manual scaling.** Scaling changes desired replicas through a new revision and
     operation.
