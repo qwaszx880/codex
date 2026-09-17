@@ -424,17 +424,25 @@ task and command contract unchanged.
 
 ### `src/platform_service/workers/fake_observer.py`
 
-Simulates the management-side status observer without Kubernetes/OpenStack. For each
-`RECONCILING` operation it compiles the same desired revision, synthesizes the required
-resource kinds, stores raw status and condition history, derives normalized health,
-and completes the operation with a convergence stage.
+Simulates the management-side status observer without Kubernetes/OpenStack. On each
+poll it locks currently `RECONCILING` operations, recompiles their exact desired
+revision, adds locally simulated CAPI-owned worker resources, and upserts raw resource
+snapshots. A resource's first `Ready` condition is added to `condition_history`; an
+existing resource's current condition is replaced without adding another history row.
+The same transaction derives normalized health, advances `observed_revision`, adds a
+convergence stage, and completes the operation.
 
 ```bash
 FAKE_CAPI_FAILURE=true python -m platform_service.workers.fake_observer
 ```
 
-That flag simulates failed conditions. This process is a local development adapter, not
-a replacement for a production watch/resync implementation.
+That flag is read once per poll and makes every resource and the operation fail for
+that poll. `FAKE_OBSERVER_INTERVAL` controls the sleep between polls and defaults to one
+second. This process reads and writes the central database directly; it is a local
+development adapter, not a replacement for a production Kubernetes watch/resync and
+authenticated status-reporting implementation. The dedicated
+[fake observer guide](../fake-observer/README.md) documents the generated resources,
+state transitions, persistence rules, failure mode, and troubleshooting workflow.
 
 ### `src/platform_service/workers/heartbeat.py`
 

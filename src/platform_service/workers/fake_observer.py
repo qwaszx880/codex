@@ -1,8 +1,9 @@
-"""Local CAPI/CAPO simulator.
+"""Poll-based local CAPI/CAPO status simulator.
 
-It observes the same RECONCILING operations that a real in-cluster observer would,
-then writes raw resources, condition transitions and derived health through the
-central database contract. It never introduces a second command format.
+For each RECONCILING operation, it recompiles the stored desired revision, synthesizes
+CAPI-owned worker resources, and writes current resource status, initial condition
+history, normalized health, and terminal convergence state directly to PostgreSQL.
+It is deliberately a local adapter, not a Kubernetes watcher or production callback.
 """
 
 import os
@@ -31,6 +32,7 @@ from platform_service.infrastructure.database import (
 
 
 def _condition(kind: str, failed: bool) -> dict:
+    """Build the single Ready condition used by the local success/failure snapshot."""
     return {
         "type": "Ready",
         "status": "False" if failed else "True",
@@ -42,6 +44,11 @@ def _condition(kind: str, failed: bool) -> dict:
 
 
 def observe_once() -> int:
+    """Observe and finish one locked batch of currently reconciling operations.
+
+    The returned count is the number selected. All selected operations share one
+    transaction, and ``SKIP LOCKED`` lets another observer process a different batch.
+    """
     failure = os.getenv("FAKE_CAPI_FAILURE", "").lower() in {"1", "true", "yes"}
     with SessionLocal.begin() as session:
         operations = session.scalars(
@@ -190,6 +197,7 @@ def observe_once() -> int:
 
 
 def main() -> None:
+    """Poll forever, using ``FAKE_OBSERVER_INTERVAL`` seconds between transactions."""
     while True:
         observe_once()
         time.sleep(float(os.getenv("FAKE_OBSERVER_INTERVAL", "1")))

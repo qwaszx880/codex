@@ -24,6 +24,7 @@ and tests can run through Docker Compose.
 - [Production boundaries](#production-boundaries)
 - [Canonical project goals and alignment review](docs/project-goals/README.md)
 - [Python code walkthrough](docs/code-walkthrough/README.md)
+- [Fake observer guide](docs/fake-observer/README.md)
 
 ## Architecture
 
@@ -105,8 +106,10 @@ fake adapter implementing that same boundary.
 - **Celery executor** uses late acknowledgements and bounded retries. The command
   processor verifies event idempotency, the exact desired revision, and a per-cluster
   lease before calling the provider-neutral compiler/adapter boundary.
-- **Fake observer** produces the resource types and condition changes a real observer
-  would report, derives health, and completes or fails the corresponding operation.
+- **Fake observer** polls reconciling operations, materializes a deterministic local
+  resource/status snapshot, derives health, and completes or fails each operation. See
+  the [fake observer guide](docs/fake-observer/README.md) for its exact behavior and
+  deliberate differences from a production watcher.
 - **Heartbeat process** runs with every executor replica and records executor/CAPI/CAPO
   versions, state, and `last_seen` in PostgreSQL.
 
@@ -150,8 +153,10 @@ The fake plane creates observations for `Cluster`, `OpenStackCluster`,
 `KubeadmControlPlane`, `OpenStackMachineTemplate`, `KubeadmConfigTemplate`,
 `MachineDeployment`, `MachineHealthCheck`, optional `ClusterResourceSet`, `MachineSet`,
 `Machine`, and `OpenStackMachine`. Each observation contains its namespace/name/UID, generation,
-resource version, conditions, raw status, and observation time. Condition transitions
-are also written to history; normalized health remains a separate projection.
+resource version, conditions, raw status, and observation time. The first simulated
+`Ready` condition is written to condition history; later simulated revisions update the
+latest resource snapshot without appending transition history. Normalized health remains
+a separate projection.
 
 ## Component flows
 
