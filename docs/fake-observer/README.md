@@ -11,6 +11,9 @@ It is separate from the fake executor adapter:
 - `workers/fake_observer.py` notices that state later, constructs an observation, sets
   `observed_revision`, and changes the operation to `SUCCEEDED` or `FAILED`.
 
+The [fake executor guide](../fake-executor/README.md) documents the command and
+application half of this local management-plane simulation.
+
 This separation keeps application intent, resource application, and observed health on
 different timelines, even though the local simulation usually converges in seconds.
 

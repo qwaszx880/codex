@@ -420,7 +420,10 @@ back on failure, and always closes the session.
 adapter reject application without pretending the error is transient.
 
 A production deployment should wire a real local Kubernetes adapter while keeping the
-task and command contract unchanged.
+task and command contract unchanged. The dedicated
+[fake executor guide](../fake-executor/README.md) documents the complete command path,
+delivery and lease guarantees, failure behavior, operating commands, and production
+boundary.
 
 ### `src/platform_service/workers/fake_observer.py`
 

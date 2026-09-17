@@ -24,6 +24,7 @@ and tests can run through Docker Compose.
 - [Production boundaries](#production-boundaries)
 - [Canonical project goals and alignment review](docs/project-goals/README.md)
 - [Python code walkthrough](docs/code-walkthrough/README.md)
+- [Fake executor guide](docs/fake-executor/README.md)
 - [Fake observer guide](docs/fake-observer/README.md)
 
 ## Architecture
@@ -105,7 +106,9 @@ fake adapter implementing that same boundary.
   errors, recovers stale claims, and emits proper Celery protocol messages.
 - **Celery executor** uses late acknowledgements and bounded retries. The command
   processor verifies event idempotency, the exact desired revision, and a per-cluster
-  lease before calling the provider-neutral compiler/adapter boundary.
+  lease before calling the provider-neutral compiler/adapter boundary. See the
+  [fake executor guide](docs/fake-executor/README.md) for the local command path,
+  concurrency behavior, failure modes, and production boundary.
 - **Fake observer** polls reconciling operations, materializes a deterministic local
   resource/status snapshot, derives health, and completes or fails each operation. See
   the [fake observer guide](docs/fake-observer/README.md) for its exact behavior and
@@ -229,6 +232,8 @@ RabbitMQ local-mgmt queue
 
 Serialization is per workload cluster, not global. Three executor replicas can process
 clusters A, B, and C concurrently, but cannot apply two operations to cluster A at once.
+The [fake executor guide](docs/fake-executor/README.md) describes how the local adapter
+preserves these production command invariants without contacting Kubernetes.
 
 ### Observation and health flow
 
@@ -721,6 +726,7 @@ Compose makes failure paths reproducible:
 | Observer outage | `docker compose stop fake-observer` | applied operations remain reconciling; observations stop |
 | Heartbeat loss | stop executor replicas | heartbeat ages; workload health is not automatically rewritten as failed |
 | Transient adapter error | set `FAKE_FAILURE_MODE=transient` for executor and recreate it | task retries with bounded backoff |
+| Permanent adapter error | set `FAKE_FAILURE_MODE=permanent` for executor and recreate it | task fails without retry and its transaction rolls back |
 | Permanent CAPI condition | set `FAKE_CAPI_FAILURE=true` for observer and recreate it | raw failed conditions and failed operation are persisted |
 | Duplicate task | redeliver a completed payload from RabbitMQ UI | processed event becomes a safe no-op |
 | Stale revision | delay an older command until a newer desired revision exists | executor classifies it stale and does not apply it |
@@ -741,6 +747,10 @@ UI, and worker/task state through Flower. Logs are available with:
 ```bash
 docker compose logs -f --tail=200 api outbox executor fake-observer rabbitmq postgres
 ```
+
+The [fake executor](docs/fake-executor/README.md) and
+[fake observer](docs/fake-observer/README.md) guides provide focused commands and
+troubleshooting for the two halves of the local management-plane simulation.
 
 ## Production boundaries
 
