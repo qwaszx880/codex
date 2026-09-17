@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from platform_service.application.errors import Forbidden, NotFound
 from platform_service.domain.spec import ClusterSpec
 from platform_service.infrastructure.database import (
     AuditEvent,
@@ -15,18 +16,6 @@ from platform_service.infrastructure.database import (
     OutboxEvent,
     Project,
 )
-
-
-class NotFound(Exception):
-    pass
-
-
-class Forbidden(Exception):
-    pass
-
-
-class Conflict(Exception):
-    pass
 
 
 PERMISSIONS = {

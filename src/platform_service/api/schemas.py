@@ -43,3 +43,42 @@ class ScaleRequest(BaseModel):
 
 class UpgradeRequest(BaseModel):
     version: str = Field(pattern=r"^v?1\.\d+\.\d+$")
+
+
+class PrincipalView(BaseModel):
+    id: UUID
+    username: str | None
+    display_name: str | None
+    email: str | None
+    principal_type: str
+    enabled: bool
+    model_config = {"from_attributes": True}
+
+
+class ProjectView(BaseModel):
+    id: UUID
+    organization_id: UUID
+    name: str
+    namespace: str
+    enabled: bool
+    model_config = {"from_attributes": True}
+
+
+class RoleView(BaseModel):
+    id: UUID
+    name: str
+    scope: str
+    builtin: bool
+    permissions: list[str] = Field(default_factory=list)
+
+
+class ProjectMembershipCreate(BaseModel):
+    principal_id: UUID
+    role_id: UUID
+
+
+class ProjectMembershipView(BaseModel):
+    id: UUID
+    project_id: UUID
+    principal: PrincipalView
+    role: RoleView

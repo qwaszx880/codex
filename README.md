@@ -171,6 +171,16 @@ client
 No password is sent to or stored by the platform API. The local bootstrap principal's
 external subject is deliberately the same UUID as the imported Keycloak user's ID.
 
+Effective project permissions are the union of direct project-role grants and
+organization-role grants inherited by projects in that organization. Role scope is
+checked while resolving permissions: organization roles cannot be attached as project
+memberships, and project roles do not become organization-wide. The local seed provides
+project viewer, operator, and administrator roles plus an organization administrator.
+Principals are mapped from validated OIDC `(issuer, sub)` claims; membership APIs use
+persisted principal IDs and never store passwords or bearer tokens.
+Membership changes and their security audit event commit in the same database
+transaction and retain the actor, target principal, role, project, and request ID.
+
 ### Mutation and dispatch flow
 
 ```text
@@ -256,6 +266,12 @@ when absent and records it with operations/audit events.
 
 | Method | Path | Permission | Behavior |
 |---|---|---|---|
+| `GET` | `/v1/principals/me` | authenticated | Read the current OIDC-backed platform principal |
+| `GET` | `/v1/projects` | authenticated | List projects visible through direct or organization membership |
+| `GET` | `/v1/projects/{project_id}/roles` | `project.admin` | List assignable project roles and grants |
+| `GET` | `/v1/projects/{project_id}/members` | `project.admin` | List project principals and role assignments |
+| `POST` | `/v1/projects/{project_id}/members` | `project.admin` | Assign a project role to an enabled principal (`201`) |
+| `DELETE` | `/v1/projects/{project_id}/members/{principal_id}/roles/{role_id}` | `project.admin` | Remove one project role assignment (`204`) |
 | `POST` | `/v1/clusters` | `cluster.create` | Create revision 1 and return an accepted operation (`202`) |
 | `GET` | `/v1/clusters?project_id={uuid}` | `cluster.read` | List non-deleted project clusters |
 | `GET` | `/v1/clusters/{cluster_id}` | `cluster.read` | Read revision pointers and cluster metadata |
@@ -417,6 +433,8 @@ in provider configuration, audit details, API responses, or ordinary application
 │   │   └── errors.py            # reconciliation error classifications
 │   ├── application/
 │   │   ├── cluster_service.py   # transactional intent and revision use cases
+│   │   ├── errors.py            # expected application failure vocabulary
+│   │   ├── iam_service.py       # project membership and RBAC use cases
 │   │   └── reconciliation.py    # idempotent, leased command processor
 │   ├── infrastructure/
 │   │   ├── database.py          # SQLAlchemy authoritative-state mappings
@@ -430,6 +448,7 @@ in provider configuration, audit details, API responses, or ordinary application
 │       ├── fake_observer.py     # local CAPI/CAPO simulation
 │       └── heartbeat.py         # executor presence/version reporting
 └── tests/
+    ├── test_iam.py
     ├── test_spec.py
     ├── test_compiler.py
     └── test_local_stack.py
@@ -451,6 +470,7 @@ routes and Celery task functions.
 | `domain/ports.py` | replaceable boundary protocols | concrete SQLAlchemy/Kubernetes clients |
 | `domain/errors.py` | shared retry/error classification vocabulary | transport-specific retry loops |
 | `application/cluster_service.py` | create/revise/scale use cases and atomic intent | HTTP or Celery framework code |
+| `application/iam_service.py` | project membership and visible-project RBAC use cases | token verification or HTTP serialization |
 | `application/reconciliation.py` | idempotency, staleness, lease and command orchestration | long-running observer loops |
 | `infrastructure/database.py` | SQLAlchemy persistence mappings and session factory | API serialization |
 | `infrastructure/auth.py` | token verification, principal mapping, permission lookup | passwords or Kubernetes RBAC |

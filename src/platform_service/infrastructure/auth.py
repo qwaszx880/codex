@@ -12,9 +12,12 @@ from sqlalchemy.orm import Session
 
 from platform_service.config import Settings, get_settings
 from platform_service.infrastructure.database import (
+    OrganizationMembership,
     Permission,
     Principal,
+    Project,
     ProjectMembership,
+    Role,
     RolePermission,
     SessionLocal,
 )
@@ -56,6 +59,7 @@ def current_identity(
             algorithms=["RS256", "ES256"],
             audience=settings.oidc_audience,
             issuer=settings.oidc_issuer,
+            options={"require": ["exp", "iss", "sub"]},
         )
     except jwt.PyJWTError as exc:
         raise HTTPException(401, "invalid identity token") from exc
@@ -83,13 +87,40 @@ def current_identity(
 
 
 def project_permissions(session: Session, principal_id: UUID, project_id: UUID) -> set[str]:
-    stmt = (
+    project_role_permissions = (
         select(Permission.name)
         .join(RolePermission, RolePermission.permission_id == Permission.id)
         .join(ProjectMembership, ProjectMembership.role_id == RolePermission.role_id)
+        .join(Role, Role.id == ProjectMembership.role_id)
         .where(
             ProjectMembership.principal_id == principal_id,
             ProjectMembership.project_id == project_id,
+            Role.scope == "project",
         )
     )
-    return set(session.scalars(stmt))
+    organization_role_permissions = (
+        select(Permission.name)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .join(OrganizationMembership, OrganizationMembership.role_id == RolePermission.role_id)
+        .join(Role, Role.id == OrganizationMembership.role_id)
+        .join(Project, Project.organization_id == OrganizationMembership.organization_id)
+        .where(
+            OrganizationMembership.principal_id == principal_id,
+            Project.id == project_id,
+            Role.scope == "organization",
+        )
+    )
+    return set(session.scalars(project_role_permissions)) | set(
+        session.scalars(organization_role_permissions)
+    )
+
+
+def require_project_permission(
+    session: Session, principal_id: UUID, project_id: UUID, permission: str
+) -> set[str]:
+    """Return effective permissions or fail closed at the shared RBAC boundary."""
+
+    permissions = project_permissions(session, principal_id, project_id)
+    if permission not in permissions:
+        raise HTTPException(403, f"missing permission: {permission}")
+    return permissions

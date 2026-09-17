@@ -46,6 +46,8 @@ src/platform_service/
 │   └── schemas.py
 ├── application/
 │   ├── cluster_service.py
+│   ├── errors.py
+│   ├── iam_service.py
 │   └── reconciliation.py
 ├── domain/
 │   ├── errors.py
@@ -71,6 +73,7 @@ alembic/
 tests/
 ├── test_cluster_service.py
 ├── test_compiler.py
+├── test_iam.py
 ├── test_local_stack.py
 └── test_spec.py
 ```
@@ -159,6 +162,10 @@ _, operation = translate_domain_errors(
 Read routes currently query SQLAlchemy directly. The project-goals review records moving
 those queries behind repository/application boundaries as follow-up work.
 
+IAM routes expose the current principal, visible projects, assignable project roles,
+and project membership management. `project.admin` gates role and membership details,
+and public responses omit the issuer and external-subject identity mapping keys.
+
 ## Application layer
 
 ### `src/platform_service/application/cluster_service.py`
@@ -191,6 +198,14 @@ cluster, operation = ClusterService(session).scale(
 
 Do not publish to RabbitMQ from this service. Queue availability must remain outside the
 API transaction.
+
+### `src/platform_service/application/iam_service.py`
+
+Owns project membership mutations and IAM reads. It accepts only enabled projects and
+principals, permits only project-scoped roles in project memberships, rejects duplicate
+assignments, and lists projects visible through direct or organization membership.
+Inspecting or changing project RBAC requires effective `project.admin` permission.
+Membership writes commit their audit record in the same transaction.
 
 ### `src/platform_service/application/reconciliation.py`
 
@@ -317,8 +332,9 @@ Implements FastAPI authentication/session dependencies:
   explicitly commit mutation transactions, while closing discards uncommitted work;
 - `current_identity()` validates bearer-token signature, issuer, audience, and claims
   against OIDC JWKS, then finds or provisions the internal principal;
-- `project_permissions()` resolves permissions through project membership, role, and
-  role-permission records.
+- `project_permissions()` unions direct project-role grants with organization-role
+  grants inherited by projects in that organization, while enforcing role scope;
+- `require_project_permission()` is the shared fail-closed route authorization helper.
 
 The external `(issuer, subject)` pair is identity authority; username and email are
 profile attributes, not authorization keys. Disabling a principal blocks access even if
