@@ -219,8 +219,10 @@ class ClusterService:
         # The event ID is the executor's idempotency key and must be embedded in
         # the exact payload that the outbox publisher later sends.
         self.session.flush()
-        payload["event_id"] = str(event.id)
-        event.payload = payload
+        # Assign a new dictionary after the flush. SQLAlchemy's plain JSON type
+        # does not track in-place dictionary changes, so mutating ``payload``
+        # would leave the persisted event_id as null.
+        event.payload = {**payload, "event_id": str(event.id)}
         self.session.add(
             AuditEvent(
                 actor_id=actor_id,
