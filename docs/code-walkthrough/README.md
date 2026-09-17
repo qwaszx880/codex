@@ -242,6 +242,8 @@ Defines the stable user-facing desired-state model:
 - `WorkerNodeTypeSpec` describes homogeneous worker groups, including their role and
   profile, while protecting labels owned by the compiler;
 - `ScalingSpec` validates autoscaling bounds;
+- `MachineHealthCheckSpec` supplies configurable remediation thresholds;
+- `AddonReferenceSpec` identifies namespace-local addon ConfigMaps and Secrets;
 - `FeatureSpec` carries optional platform features;
 - `ClusterSpec` assembles the contract and enforces unique node types and odd control-plane
   replica counts.
@@ -365,6 +367,11 @@ Each worker node type becomes a `MachineDeployment` referencing a
 `KubeadmConfigTemplate` and `OpenStackMachineTemplate`. Its selector exactly matches
 the machine-template labels, allowing CAPI to create and roll compatible
 `MachineSet`s. The compiler derives cluster ownership, node-type, and node-role labels.
+The `KubeadmControlPlane` similarly references its own `OpenStackMachineTemplate`.
+Executor-resolved provider configuration supplies the CAPO identity/network settings,
+and persisted node-profile specifications supply concrete machine flavor, image, volume,
+availability-zone, SSH-key, port, and server-group values. Compilation also emits optional
+`MachineHealthCheck` and `ClusterResourceSet` resources and Cluster Autoscaler annotations.
 
 ```python
 resources = CapoCompiler().compile("demo", "p-a83f", spec)

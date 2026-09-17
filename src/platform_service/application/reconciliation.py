@@ -7,14 +7,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from platform_service.domain.errors import DuplicateEvent, OperationConflict, StaleOperation
-from platform_service.domain.ports import ClusterCompiler, ManagementClusterAdapter
+from platform_service.domain.ports import (
+    ClusterCompiler,
+    CompilationContext,
+    ManagementClusterAdapter,
+)
 from platform_service.domain.spec import ClusterSpec
 from platform_service.infrastructure.database import (
     Cluster,
     ClusterRevision,
+    NodeProfile,
     Operation,
     ProcessedEvent,
     Project,
+    ProviderReference,
     ReconciliationLease,
 )
 
@@ -76,9 +82,28 @@ class CommandProcessor:
             )
         )
         project = self.session.get(Project, cluster.project_id)
+        provider = self.session.get(ProviderReference, cluster.provider_reference_id)
+        desired_spec = ClusterSpec.model_validate(rev.spec)
+        profile_names = {
+            desired_spec.control_plane.node_profile,
+            *(pool.node_profile for pool in desired_spec.worker_node_types),
+        }
+        profiles = self.session.scalars(
+            select(NodeProfile).where(
+                NodeProfile.project_id == cluster.project_id,
+                NodeProfile.provider_reference_id == cluster.provider_reference_id,
+                NodeProfile.name.in_(profile_names),
+            )
+        ).all()
         self.adapter.apply(
             self.compiler.compile(
-                cluster.name, project.namespace, ClusterSpec.model_validate(rev.spec)
+                cluster.name,
+                project.namespace,
+                desired_spec,
+                CompilationContext(
+                    provider=provider.configuration,
+                    node_profiles={profile.name: profile.specification for profile in profiles},
+                ),
             )
         )
         cluster.applied_revision = target
