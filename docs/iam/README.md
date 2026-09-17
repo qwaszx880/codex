@@ -9,6 +9,9 @@ Kubernetes users or ServiceAccounts, and it does not replace the external identi
 provider. Keycloak is the local OIDC provider; another standards-compliant provider can
 be configured in production.
 
+For a route-by-route list of required permissions and response codes, see the
+[API reference](../api-reference/README.md).
+
 ## Mental model
 
 ```mermaid

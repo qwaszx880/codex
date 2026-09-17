@@ -8,7 +8,8 @@ without first building an unrelated tutorial application.
 Start with the root [README](../../README.md) for architecture and local setup. Keep the
 [code walkthrough](../code-walkthrough/README.md) open for a module-by-module map. This
 guide concentrates on **how** the HTTP application works and **why** each FastAPI
-feature is used.
+feature is used. Use the [API reference](../api-reference/README.md) for the complete
+route, permission, status-code, and request-body inventory.
 
 ## What you will learn
 

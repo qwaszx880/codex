@@ -16,7 +16,7 @@ and tests can run through Docker Compose.
 - [Components](#components)
 - [Operation lifecycle](#operation-lifecycle)
 - [Desired and observed state](#desired-and-observed-state)
-- [API](#api)
+- [API reference](docs/api-reference/README.md)
 - [Database model](#database-model)
 - [Detailed database schema and frontend polling guide](docs/database-schema/README.md)
 - [IAM, tenancy, and authorization guide](docs/iam/README.md)
@@ -280,156 +280,15 @@ passwords and application user passwords are not stored in ordinary platform tab
 
 ## API
 
-All application endpoints except `/healthz` and `/metrics` are below `/v1` and require
-`Authorization: Bearer <token>`. Send an optional `X-Request-ID`; the API generates one
-when absent and records it with operations/audit events.
+The complete endpoint inventory, permissions, status codes, request-body summary,
+polling contract, errors, and examples live in the dedicated
+[API reference](docs/api-reference/README.md). Swagger UI is available at
+`http://<PLATFORM_PUBLIC_HOST>:8000/docs` when the service is running.
 
-| Method | Path | Permission | Behavior |
-|---|---|---|---|
-| `GET` | `/v1/principals/me` | authenticated | Read the current OIDC-backed platform principal |
-| `GET` | `/v1/organizations` | authenticated | List organizations where the caller has an organization role |
-| `GET` | `/v1/organizations/{organization_id}/roles` | organization `project.admin` | List organization roles available for principal provisioning |
-| `GET/POST` | `/v1/organizations/{organization_id}/principals` | organization `project.admin` | List identity mappings or provision one with an initial organization role (`201`) |
-| `PATCH` | `/v1/organizations/{organization_id}/principals/{principal_id}` | organization `project.admin` | Update a mapped principal's profile or enabled state |
-| `GET/POST` | `/v1/organizations/{organization_id}/projects` | organization `project.admin` | List all organization projects or create one (`201`) |
-| `GET` | `/v1/projects` | authenticated | List projects visible through direct or organization membership |
-| `PATCH` | `/v1/projects/{project_id}` | `project.admin` | Change a project's name or enabled state |
-| `GET` | `/v1/projects/{project_id}/roles` | `project.admin` | List assignable project roles and grants |
-| `GET` | `/v1/projects/{project_id}/members` | `project.admin` | List project principals and role assignments |
-| `POST` | `/v1/projects/{project_id}/members` | `project.admin` | Assign a project role to an enabled principal (`201`) |
-| `DELETE` | `/v1/projects/{project_id}/members/{principal_id}/roles/{role_id}` | `project.admin` | Remove one project role assignment (`204`) |
-| `GET/POST` | `/v1/projects/{project_id}/provider-references` | `cluster.read` / `provider.configure` | List safe provider metadata or create a secret reference (`201`) |
-| `PATCH/DELETE` | `/v1/projects/{project_id}/provider-references/{reference_id}` | `provider.configure` | Update or delete an unused provider reference |
-| `GET/POST` | `/v1/projects/{project_id}/node-profiles` | `cluster.read` / `provider.configure` | List or create reusable machine profiles (`201`) |
-| `PUT/DELETE` | `/v1/projects/{project_id}/node-profiles/{profile_id}` | `provider.configure` | Replace or delete a machine profile |
-| `GET` | `/v1/management-clusters` | authenticated | List enabled cluster placement targets |
-| `POST` | `/v1/clusters` | `cluster.create` | Create revision 1 and return an accepted operation (`202`) |
-| `GET` | `/v1/clusters?project_id={uuid}` | `cluster.read` | List non-deleted project clusters |
-| `GET` | `/v1/clusters/{cluster_id}` | `cluster.read` | Read revision pointers and cluster metadata |
-| `PATCH` | `/v1/clusters/{cluster_id}` | `cluster.update` | Replace desired `ClusterSpec` in a new revision (`202`) |
-| `DELETE` | `/v1/clusters/{cluster_id}` | `cluster.delete` | Reconcile deletion and retain a tombstone/history (`202`) |
-| `POST` | `/v1/clusters/{cluster_id}/worker-node-types` | `cluster.update` | Add a worker node type in a new revision (`202`) |
-| `PUT/DELETE` | `/v1/clusters/{cluster_id}/worker-node-types/{name}` | `cluster.update` | Replace or remove a worker node type in a new revision (`202`) |
-| `POST` | `/v1/clusters/{cluster_id}/scale` | `cluster.scale` | Change one worker-node-type replica count in a new revision (`202`) |
-| `POST` | `/v1/clusters/{cluster_id}/upgrade` | `cluster.upgrade` | Change Kubernetes version in a new revision (`202`) |
-| `GET` | `/v1/clusters/{cluster_id}/revisions` | `cluster.read` | Return immutable desired-state history |
-| `GET` | `/v1/clusters/{cluster_id}/operations` | `cluster.read` | Return operation history newest first |
-| `GET` | `/v1/operations/{operation_id}` | `cluster.read` | Read a single operation |
-| `GET` | `/v1/clusters/{cluster_id}/health` | `cluster.read` | Read normalized health or `UNKNOWN` before observation |
-| `GET` | `/v1/clusters/{cluster_id}/resources` | `cluster.read` | Read raw resource observations |
-| `GET` | `/v1/clusters/{cluster_id}/conditions` | `cluster.read` | Read conditions grouped by resource |
-| `GET` | `/healthz` | none | Process liveness response |
-| `GET` | `/metrics` | none in local setup | Prometheus-formatted application metrics endpoint |
-
-OpenAPI is available at `http://<PLATFORM_PUBLIC_HOST>:8000/docs`. Cluster create,
-full-spec update, worker-node-type changes, scale, upgrade, and delete are asynchronous;
-they return an operation that clients poll. Tenant metadata administration is a short
-database transaction and returns `200`, `201`, or `204` directly.
-
-Creating a principal provisions only the platform mapping for an existing external
-OIDC identity and its initial organization role. It never creates an identity-provider
-password or returns identity-provider credentials. Provider-reference responses
-similarly omit `secret_reference` even though authorized creation/update requests can
-set that opaque pointer. Provider configuration rejects common raw credential keys at
-any nesting level; credentials belong behind `secret_reference`.
-
-### API response and error semantics
-
-Mutation endpoints return `202 Accepted` with an operation, not a finished cluster:
-
-```json
-{
-  "id": "7aab2bde-1548-4454-bdc8-467932736c97",
-  "cluster_id": "d06a864a-57b3-4a9b-abf2-4b6248e76aec",
-  "kind": "CREATE",
-  "state": "ACCEPTED",
-  "target_revision": 1,
-  "created_at": "2026-09-16T12:00:00Z",
-  "completed_at": null,
-  "failure": null
-}
-```
-
-Poll `/v1/operations/{id}` or list the cluster's operations. The local observer normally
-moves the operation from `ACCEPTED` to `RECONCILING` and finally `SUCCEEDED` within a
-few seconds. Health may remain `UNKNOWN` until the first observation.
-
-Common responses:
-
-| Status | Meaning | Typical cause |
-|---|---|---|
-| `202` | intent accepted asynchronously | cluster create, update, worker-node-type change, scale, upgrade, or delete committed |
-| `401` | token invalid | bad signature, issuer, audience, expiry, or missing bearer token |
-| `403` | authenticated but forbidden | disabled principal or missing project permission |
-| `404` | tenant-visible object missing | unknown cluster, project, management target, or worker node type |
-| `422` | request validation failed | invalid version, replicas, name, autoscaling range, or duplicate pools |
-
-Pydantic error responses identify the failing JSON location. Domain/provider validation
-should be added behind the same application-service boundary as capabilities expand.
-
-### Example payloads
-
-Create:
-
-```json
-{
-  "project_id": "30000000-0000-0000-0000-000000000001",
-  "management_cluster_id": "40000000-0000-0000-0000-000000000001",
-  "provider_reference_id": "50000000-0000-0000-0000-000000000001",
-  "name": "demo",
-  "spec": {
-    "kubernetes": {"version": "v1.31.1"},
-    "networking": {"pod_cidr": "10.244.0.0/16", "service_cidr": "10.96.0.0/12"},
-    "control_plane": {"replicas": 3, "node_profile": "control"},
-    "worker_node_types": [
-      {
-        "name": "general",
-        "role": "worker",
-        "replicas": 3,
-        "node_profile": "compute",
-        "labels": {"workload.example/tier": "general"}
-      }
-    ],
-    "scaling": {"autoscaling": false},
-    "features": {"audit_logs": true, "metrics": true},
-    "machine_health_check": {"enabled": true},
-    "addons": [{"name": "workload-cni", "kind": "ConfigMap"}],
-    "addon_strategy": "Reconcile"
-  }
-}
-```
-
-Each worker node type compiles to a CAPI `MachineDeployment`, plus its
-`KubeadmConfigTemplate` and `OpenStackMachineTemplate`. CAPI owns the corresponding
-`MachineSet` lifecycle; the platform does not create competing `MachineSet` objects.
-The control plane gets its own `OpenStackMachineTemplate`, referenced by the
-`KubeadmControlPlane`. The executor resolves referenced node profiles into CAPO flavor,
-image, root-volume, availability-zone, SSH-key, port, and server-group fields; missing or
-incomplete profiles fail compilation rather than producing an unusable machine template.
-The compiler derives the deployment selector and the
-`cluster.x-k8s.io/cluster-name`, `platform.example/worker-node-type`, and
-`node-role.kubernetes.io/<role>` labels. Those labels are reserved and rejected in
-caller-supplied `labels`. The old input key `worker_pools` remains accepted for stored
-revision and client compatibility, but new requests and serialized specs use
-`worker_node_types`.
-
-Machine health checks are enabled by default for control-plane and worker machines with
-a 10-minute startup timeout and five-minute `Ready=False`/`Unknown` thresholds. They can
-be disabled or tuned in `machine_health_check`. Autoscaling may be configured globally or
-per worker node type; enabled deployments receive Cluster Autoscaler min/max annotations
-and omit `spec.replicas` so the autoscaler owns that field. Addon references compile to a
-`ClusterResourceSet`; the referenced ConfigMaps or Secrets must already exist in the
-project namespace and contain valid addon manifests.
-
-Scale and upgrade:
-
-```json
-{"pool": "workers", "replicas": 5}
-```
-
-```json
-{"version": "v1.32.0"}
-```
+All application routes are below `/v1` and require a bearer token. Cluster mutations
+return `202 Accepted` with an operation to poll; they do not wait for RabbitMQ,
+Kubernetes, OpenStack, or convergence. `/healthz` and the locally unprotected
+`/metrics` mount are process-level exceptions.
 
 ## Database model
 
