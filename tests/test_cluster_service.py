@@ -2,8 +2,11 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import uuid4
 
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+
 from platform_service.application.cluster_service import ClusterService
-from platform_service.infrastructure.database import Cluster
+from platform_service.infrastructure.database import Base, Cluster, ManagementCluster, OutboxEvent
 
 
 def test_upgrade_delegates_revision_creation_to_application_service():
@@ -62,3 +65,42 @@ def test_scale_normalizes_legacy_worker_pool_revision():
     revision = service.revise.call_args.kwargs
     assert revision["spec"].worker_node_types[0].replicas == 5
     assert "worker_node_types" in revision["spec"].model_dump()
+
+
+def test_intent_persists_generated_event_id_in_outbox_payload():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    management_cluster_id = uuid4()
+    cluster = SimpleNamespace(
+        id=uuid4(),
+        project_id=uuid4(),
+        management_cluster_id=management_cluster_id,
+    )
+
+    with Session(engine) as session:
+        session.add(
+            ManagementCluster(
+                id=management_cluster_id,
+                name="local-mgmt",
+                provider="openstack",
+                region="local",
+                executor_compatibility="0.1",
+            )
+        )
+        session.commit()
+
+        ClusterService(session)._intent(
+            cluster=cluster,
+            organization_id=None,
+            kind="CREATE",
+            revision=1,
+            actor_id=uuid4(),
+            request_id="request-3",
+            source_ip=None,
+        )
+        session.commit()
+        session.expire_all()
+
+        event = session.scalar(select(OutboxEvent))
+
+        assert event.payload["event_id"] == str(event.id)
