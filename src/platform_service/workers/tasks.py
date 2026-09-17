@@ -12,15 +12,19 @@ from platform_service.workers.celery_app import celery_app
 class FakeManagementAdapter:
     """Local adapter implementing the production port and command contract."""
 
-    def apply(self, resources):
+    @staticmethod
+    def _fail_if_configured():
         mode = os.getenv("FAKE_FAILURE_MODE", "")
         if mode == "permanent":
             raise ValueError("simulated provider rejection")
         if mode == "transient":
             raise ConnectionError("simulated management API outage")
 
+    def apply(self, resources):
+        self._fail_if_configured()
+
     def delete(self, namespace, name):
-        return None
+        self._fail_if_configured()
 
 
 @celery_app.task(name="platform.reconcile", bind=True, max_retries=6)

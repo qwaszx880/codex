@@ -13,16 +13,31 @@ from sqlalchemy.orm import Session
 
 from platform_service.api.schemas import (
     ClusterCreate,
+    ClusterUpdate,
     ClusterView,
+    ManagementClusterView,
+    NodeProfileCreate,
+    NodeProfileUpdate,
+    NodeProfileView,
     OperationView,
+    OrganizationView,
+    PrincipalCreate,
+    PrincipalUpdate,
     PrincipalView,
+    ProviderReferenceCreate,
+    ProviderReferenceUpdate,
+    ProviderReferenceView,
+    ProjectCreate,
     ProjectMembershipCreate,
     ProjectMembershipView,
+    ProjectUpdate,
     ProjectView,
     RoleView,
     ScaleRequest,
     UpgradeRequest,
+    WorkerNodeTypeCreate,
 )
+from platform_service.application.admin_service import AdminService
 from platform_service.application.cluster_service import ClusterService
 from platform_service.application.errors import Conflict, Forbidden, NotFound
 from platform_service.application.iam_service import IamService
@@ -31,14 +46,21 @@ from platform_service.infrastructure.auth import (
     current_identity,
     db_session,
     project_permissions,
+    require_organization_permission,
     require_project_permission,
 )
 from platform_service.infrastructure.database import (
     Cluster,
     ClusterRevision,
     ClusterStatus,
+    ManagementCluster,
+    NodeProfile,
     Operation,
+    Organization,
+    OrganizationMembership,
     Principal,
+    Project,
+    ProviderReference,
     ResourceStatus,
 )
 
@@ -73,11 +95,391 @@ def principal_me(
     return session.get(Principal, identity.principal_id)
 
 
+@router.get("/organizations", response_model=list[OrganizationView])
+def organizations(
+    identity: Identity = Depends(current_identity), session: Session = Depends(db_session)
+):
+    """List organizations in which the principal has an organization role."""
+
+    return session.scalars(
+        select(Organization)
+        .join(
+            OrganizationMembership,
+            OrganizationMembership.organization_id == Organization.id,
+        )
+        .where(OrganizationMembership.principal_id == identity.principal_id)
+        .distinct()
+        .order_by(Organization.name)
+    ).all()
+
+
+@router.get("/organizations/{organization_id}/principals", response_model=list[PrincipalView])
+def organization_principals(
+    organization_id: UUID,
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    require_organization_permission(
+        session, identity.principal_id, organization_id, "project.admin"
+    )
+    return session.scalars(
+        select(Principal)
+        .join(
+            OrganizationMembership,
+            OrganizationMembership.principal_id == Principal.id,
+        )
+        .where(OrganizationMembership.organization_id == organization_id)
+        .distinct()
+        .order_by(Principal.username, Principal.id)
+    ).all()
+
+
+@router.get("/organizations/{organization_id}/roles", response_model=list[RoleView])
+def organization_roles(
+    organization_id: UUID,
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    permissions = require_organization_permission(
+        session, identity.principal_id, organization_id, "project.admin"
+    )
+    return [
+        role_view(role, grants)
+        for role, grants in IamService(session).organization_roles(permissions)
+    ]
+
+
+@router.post(
+    "/organizations/{organization_id}/principals",
+    response_model=PrincipalView,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_principal(
+    organization_id: UUID,
+    body: PrincipalCreate,
+    request: Request,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    permissions = require_organization_permission(
+        session, identity.principal_id, organization_id, "project.admin"
+    )
+    return translate_domain_errors(
+        lambda: AdminService(session).create_principal(
+            organization_id=organization_id,
+            permissions=permissions,
+            actor_id=identity.principal_id,
+            request_id=request_id,
+            source_ip=request.client.host if request.client else None,
+            **body.model_dump(),
+        )
+    )
+
+
+@router.patch(
+    "/organizations/{organization_id}/principals/{principal_id}",
+    response_model=PrincipalView,
+)
+def update_principal(
+    organization_id: UUID,
+    principal_id: UUID,
+    body: PrincipalUpdate,
+    request: Request,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    permissions = require_organization_permission(
+        session, identity.principal_id, organization_id, "project.admin"
+    )
+    return translate_domain_errors(
+        lambda: AdminService(session).update_principal(
+            organization_id=organization_id,
+            principal_id=principal_id,
+            changes=body.model_dump(exclude_unset=True, exclude_none=True),
+            permissions=permissions,
+            actor_id=identity.principal_id,
+            request_id=request_id,
+            source_ip=request.client.host if request.client else None,
+        )
+    )
+
+
+@router.get("/organizations/{organization_id}/projects", response_model=list[ProjectView])
+def organization_projects(
+    organization_id: UUID,
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    require_organization_permission(
+        session, identity.principal_id, organization_id, "project.admin"
+    )
+    return session.scalars(
+        select(Project).where(Project.organization_id == organization_id).order_by(Project.name)
+    ).all()
+
+
+@router.post(
+    "/organizations/{organization_id}/projects",
+    response_model=ProjectView,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_project(
+    organization_id: UUID,
+    body: ProjectCreate,
+    request: Request,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    permissions = require_organization_permission(
+        session, identity.principal_id, organization_id, "project.admin"
+    )
+    return translate_domain_errors(
+        lambda: AdminService(session).create_project(
+            organization_id=organization_id,
+            permissions=permissions,
+            actor_id=identity.principal_id,
+            request_id=request_id,
+            source_ip=request.client.host if request.client else None,
+            **body.model_dump(),
+        )
+    )
+
+
 @router.get("/projects", response_model=list[ProjectView])
 def projects(
     identity: Identity = Depends(current_identity), session: Session = Depends(db_session)
 ):
     return IamService(session).visible_projects(identity.principal_id)
+
+
+@router.patch("/projects/{project_id}", response_model=ProjectView)
+def update_project(
+    project_id: UUID,
+    body: ProjectUpdate,
+    request: Request,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    permissions = require_project_permission(
+        session, identity.principal_id, project_id, "project.admin"
+    )
+    return translate_domain_errors(
+        lambda: AdminService(session).update_project(
+            project_id=project_id,
+            changes=body.model_dump(exclude_unset=True, exclude_none=True),
+            permissions=permissions,
+            actor_id=identity.principal_id,
+            request_id=request_id,
+            source_ip=request.client.host if request.client else None,
+        )
+    )
+
+
+@router.get("/projects/{project_id}/node-profiles", response_model=list[NodeProfileView])
+def node_profiles(
+    project_id: UUID,
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    require_project_permission(session, identity.principal_id, project_id, "cluster.read")
+    return session.scalars(
+        select(NodeProfile).where(NodeProfile.project_id == project_id).order_by(NodeProfile.name)
+    ).all()
+
+
+@router.get(
+    "/projects/{project_id}/provider-references",
+    response_model=list[ProviderReferenceView],
+)
+def provider_references(
+    project_id: UUID,
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    require_project_permission(session, identity.principal_id, project_id, "cluster.read")
+    return session.scalars(
+        select(ProviderReference)
+        .where(ProviderReference.project_id == project_id)
+        .order_by(ProviderReference.name)
+    ).all()
+
+
+@router.post(
+    "/projects/{project_id}/provider-references",
+    response_model=ProviderReferenceView,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_provider_reference(
+    project_id: UUID,
+    body: ProviderReferenceCreate,
+    request: Request,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    permissions = require_project_permission(
+        session, identity.principal_id, project_id, "provider.configure"
+    )
+    return translate_domain_errors(
+        lambda: AdminService(session).create_provider_reference(
+            project_id=project_id,
+            permissions=permissions,
+            actor_id=identity.principal_id,
+            request_id=request_id,
+            source_ip=request.client.host if request.client else None,
+            **body.model_dump(),
+        )
+    )
+
+
+@router.patch(
+    "/projects/{project_id}/provider-references/{reference_id}",
+    response_model=ProviderReferenceView,
+)
+def update_provider_reference(
+    project_id: UUID,
+    reference_id: UUID,
+    body: ProviderReferenceUpdate,
+    request: Request,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    permissions = require_project_permission(
+        session, identity.principal_id, project_id, "provider.configure"
+    )
+    return translate_domain_errors(
+        lambda: AdminService(session).update_provider_reference(
+            project_id=project_id,
+            reference_id=reference_id,
+            changes=body.model_dump(exclude_unset=True, exclude_none=True),
+            permissions=permissions,
+            actor_id=identity.principal_id,
+            request_id=request_id,
+            source_ip=request.client.host if request.client else None,
+        )
+    )
+
+
+@router.delete("/projects/{project_id}/provider-references/{reference_id}", status_code=204)
+def delete_provider_reference(
+    project_id: UUID,
+    reference_id: UUID,
+    request: Request,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    permissions = require_project_permission(
+        session, identity.principal_id, project_id, "provider.configure"
+    )
+    translate_domain_errors(
+        lambda: AdminService(session).delete_provider_reference(
+            project_id=project_id,
+            reference_id=reference_id,
+            permissions=permissions,
+            actor_id=identity.principal_id,
+            request_id=request_id,
+            source_ip=request.client.host if request.client else None,
+        )
+    )
+
+
+@router.get("/management-clusters", response_model=list[ManagementClusterView])
+def management_clusters(
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    """List enabled placement targets for authenticated cluster forms."""
+
+    del identity
+    return session.scalars(
+        select(ManagementCluster)
+        .where(ManagementCluster.enabled.is_(True))
+        .order_by(ManagementCluster.name)
+    ).all()
+
+
+@router.post(
+    "/projects/{project_id}/node-profiles",
+    response_model=NodeProfileView,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_node_profile(
+    project_id: UUID,
+    body: NodeProfileCreate,
+    request: Request,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    permissions = require_project_permission(
+        session, identity.principal_id, project_id, "provider.configure"
+    )
+    return translate_domain_errors(
+        lambda: AdminService(session).create_node_profile(
+            project_id=project_id,
+            permissions=permissions,
+            actor_id=identity.principal_id,
+            request_id=request_id,
+            source_ip=request.client.host if request.client else None,
+            **body.model_dump(),
+        )
+    )
+
+
+@router.put("/projects/{project_id}/node-profiles/{profile_id}", response_model=NodeProfileView)
+def update_node_profile(
+    project_id: UUID,
+    profile_id: UUID,
+    body: NodeProfileUpdate,
+    request: Request,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    permissions = require_project_permission(
+        session, identity.principal_id, project_id, "provider.configure"
+    )
+    return translate_domain_errors(
+        lambda: AdminService(session).update_node_profile(
+            project_id=project_id,
+            profile_id=profile_id,
+            specification=body.specification,
+            permissions=permissions,
+            actor_id=identity.principal_id,
+            request_id=request_id,
+            source_ip=request.client.host if request.client else None,
+        )
+    )
+
+
+@router.delete("/projects/{project_id}/node-profiles/{profile_id}", status_code=204)
+def delete_node_profile(
+    project_id: UUID,
+    profile_id: UUID,
+    request: Request,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    permissions = require_project_permission(
+        session, identity.principal_id, project_id, "provider.configure"
+    )
+    translate_domain_errors(
+        lambda: AdminService(session).delete_node_profile(
+            project_id=project_id,
+            profile_id=profile_id,
+            permissions=permissions,
+            actor_id=identity.principal_id,
+            request_id=request_id,
+            source_ip=request.client.host if request.client else None,
+        )
+    )
 
 
 def role_view(role, permissions: list[str]) -> RoleView:
@@ -247,6 +649,124 @@ def cluster(
     session: Session = Depends(db_session),
 ):
     return authorized_cluster(cluster_id, identity, session, "cluster.read")
+
+
+def mutation_context(cluster: Cluster, identity: Identity, session: Session, request_id: str):
+    """Build the repeated authorization/correlation arguments for cluster writes."""
+
+    return {
+        "actor_id": identity.principal_id,
+        "permissions": project_permissions(session, identity.principal_id, cluster.project_id),
+        "request_id": request_id,
+    }
+
+
+@router.patch("/clusters/{cluster_id}", response_model=OperationView, status_code=202)
+def update_cluster(
+    cluster_id: UUID,
+    body: ClusterUpdate,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    cluster = authorized_cluster(cluster_id, identity, session, "cluster.update")
+    _, operation = translate_domain_errors(
+        lambda: ClusterService(session).replace_spec(
+            cluster_id=cluster_id,
+            spec=body.spec,
+            reason=body.reason,
+            **mutation_context(cluster, identity, session, request_id),
+        )
+    )
+    return operation
+
+
+@router.delete("/clusters/{cluster_id}", response_model=OperationView, status_code=202)
+def delete_cluster(
+    cluster_id: UUID,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    cluster = authorized_cluster(cluster_id, identity, session, "cluster.delete")
+    _, operation = translate_domain_errors(
+        lambda: ClusterService(session).delete(
+            cluster_id=cluster_id,
+            **mutation_context(cluster, identity, session, request_id),
+        )
+    )
+    return operation
+
+
+@router.post(
+    "/clusters/{cluster_id}/worker-node-types",
+    response_model=OperationView,
+    status_code=202,
+)
+def create_worker_node_type(
+    cluster_id: UUID,
+    body: WorkerNodeTypeCreate,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    cluster = authorized_cluster(cluster_id, identity, session, "cluster.update")
+    _, operation = translate_domain_errors(
+        lambda: ClusterService(session).add_worker_node_type(
+            cluster_id=cluster_id,
+            worker_node_type=body.worker_node_type,
+            **mutation_context(cluster, identity, session, request_id),
+        )
+    )
+    return operation
+
+
+@router.put(
+    "/clusters/{cluster_id}/worker-node-types/{node_type_name}",
+    response_model=OperationView,
+    status_code=202,
+)
+def replace_worker_node_type(
+    cluster_id: UUID,
+    node_type_name: str,
+    body: WorkerNodeTypeCreate,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    cluster = authorized_cluster(cluster_id, identity, session, "cluster.update")
+    _, operation = translate_domain_errors(
+        lambda: ClusterService(session).replace_worker_node_type(
+            cluster_id=cluster_id,
+            node_type_name=node_type_name,
+            worker_node_type=body.worker_node_type,
+            **mutation_context(cluster, identity, session, request_id),
+        )
+    )
+    return operation
+
+
+@router.delete(
+    "/clusters/{cluster_id}/worker-node-types/{node_type_name}",
+    response_model=OperationView,
+    status_code=202,
+)
+def delete_worker_node_type(
+    cluster_id: UUID,
+    node_type_name: str,
+    request_id: str = Depends(resolve_request_id),
+    identity: Identity = Depends(current_identity),
+    session: Session = Depends(db_session),
+):
+    cluster = authorized_cluster(cluster_id, identity, session, "cluster.update")
+    _, operation = translate_domain_errors(
+        lambda: ClusterService(session).remove_worker_node_type(
+            cluster_id=cluster_id,
+            node_type_name=node_type_name,
+            **mutation_context(cluster, identity, session, request_id),
+        )
+    )
+    return operation
 
 
 @router.post("/clusters/{cluster_id}/scale", response_model=OperationView, status_code=202)

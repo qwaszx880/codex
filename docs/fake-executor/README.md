@@ -31,11 +31,11 @@ One accepted mutation follows this executor path:
    `CapoCompiler`, `FakeManagementAdapter`, and the container hostname as executor ID.
 4. The processor rejects an already completed event, rejects a target revision that is
    no longer desired, and acquires or renews the workload cluster's two-minute lease.
-5. It loads the immutable target revision plus the project, provider reference, and
-   referenced node profiles, then compiles the provider-neutral `ClusterSpec` into a
-   CAPI/CAPO resource graph.
-6. `FakeManagementAdapter.apply()` returns without contacting an external service,
-   unless a configured failure mode asks it to raise an error.
+5. For ordinary reconciliation it loads the immutable target revision and compilation
+   context, then builds the CAPI/CAPO graph. For deletion it calls the adapter with only
+   the project namespace and cluster name.
+6. `FakeManagementAdapter.apply()` or `.delete()` returns without contacting an external
+   service, unless a configured failure mode asks it to raise an error.
 7. A successful database commit records the target as `applied_revision`, leaves the
    operation ready for observation in `RECONCILING`, and inserts the event ID into
    `processed_events`.
@@ -115,7 +115,7 @@ health.
 
 ## Failure modes
 
-`FakeManagementAdapter.apply()` reads `FAKE_FAILURE_MODE` for every application call:
+`FakeManagementAdapter` reads `FAKE_FAILURE_MODE` for every apply or delete call:
 
 | Value | Adapter behavior | Celery behavior |
 |---|---|---|

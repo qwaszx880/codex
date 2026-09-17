@@ -5,16 +5,18 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from platform_service.application.errors import Forbidden, NotFound
-from platform_service.domain.spec import ClusterSpec
+from platform_service.application.errors import Conflict, Forbidden, NotFound
+from platform_service.domain.spec import ClusterSpec, WorkerNodeTypeSpec
 from platform_service.infrastructure.database import (
     AuditEvent,
     Cluster,
     ClusterRevision,
     ManagementCluster,
+    NodeProfile,
     Operation,
     OutboxEvent,
     Project,
+    ProviderReference,
 )
 
 
@@ -58,10 +60,14 @@ class ClusterService:
         self._authorize(permissions, "CREATE")
         project = self.session.get(Project, project_id)
         management = self.session.get(ManagementCluster, management_cluster_id)
+        provider = self.session.get(ProviderReference, provider_reference_id)
         if not project or not project.enabled:
             raise NotFound("project")
         if not management or not management.enabled:
             raise NotFound("management cluster")
+        if not provider or provider.project_id != project_id:
+            raise NotFound("provider reference")
+        self._validate_node_profiles(project_id, provider_reference_id, spec)
         cluster = Cluster(
             project_id=project_id,
             name=name,
@@ -104,6 +110,17 @@ class ClusterService:
         ).scalar_one_or_none()
         if not cluster or cluster.deleted_at:
             raise NotFound("cluster")
+        pending_delete = self.session.scalar(
+            select(Operation).where(
+                Operation.cluster_id == cluster_id,
+                Operation.kind == "DELETE",
+                Operation.state.in_(("ACCEPTED", "RECONCILING")),
+            )
+        )
+        if pending_delete is not None:
+            raise Conflict("cluster deletion is already in progress")
+        if kind != "DELETE":
+            self._validate_node_profiles(cluster.project_id, cluster.provider_reference_id, spec)
         project = self.session.get(Project, cluster.project_id)
         previous = cluster.desired_revision
         number = previous + 1
@@ -180,6 +197,113 @@ class ClusterService:
             reason=f"upgrade to {version}",
             **context,
         )
+
+    def replace_spec(self, *, cluster_id: UUID, spec: ClusterSpec, reason: str, **context):
+        """Append a complete desired-state replacement as an asynchronous update."""
+
+        return self.revise(
+            cluster_id=cluster_id,
+            spec=spec,
+            kind="UPDATE",
+            reason=reason,
+            **context,
+        )
+
+    def add_worker_node_type(
+        self, *, cluster_id: UUID, worker_node_type: WorkerNodeTypeSpec, **context
+    ):
+        spec = self._current_spec(cluster_id)
+        if any(item.name == worker_node_type.name for item in spec.worker_node_types):
+            raise Conflict("worker node type already exists")
+        spec.worker_node_types.append(worker_node_type)
+        return self.replace_spec(
+            cluster_id=cluster_id,
+            spec=ClusterSpec.model_validate(spec.model_dump()),
+            reason=f"add worker node type {worker_node_type.name}",
+            **context,
+        )
+
+    def replace_worker_node_type(
+        self,
+        *,
+        cluster_id: UUID,
+        node_type_name: str,
+        worker_node_type: WorkerNodeTypeSpec,
+        **context,
+    ):
+        if worker_node_type.name != node_type_name:
+            raise Conflict("worker node type name must match the URL")
+        spec = self._current_spec(cluster_id)
+        for index, item in enumerate(spec.worker_node_types):
+            if item.name == node_type_name:
+                spec.worker_node_types[index] = worker_node_type
+                break
+        else:
+            raise NotFound("worker node type")
+        return self.replace_spec(
+            cluster_id=cluster_id,
+            spec=ClusterSpec.model_validate(spec.model_dump()),
+            reason=f"replace worker node type {node_type_name}",
+            **context,
+        )
+
+    def remove_worker_node_type(self, *, cluster_id: UUID, node_type_name: str, **context):
+        spec = self._current_spec(cluster_id)
+        remaining = [item for item in spec.worker_node_types if item.name != node_type_name]
+        if len(remaining) == len(spec.worker_node_types):
+            raise NotFound("worker node type")
+        if not remaining:
+            raise Conflict("a cluster must have at least one worker node type")
+        spec.worker_node_types = remaining
+        return self.replace_spec(
+            cluster_id=cluster_id,
+            spec=ClusterSpec.model_validate(spec.model_dump()),
+            reason=f"remove worker node type {node_type_name}",
+            **context,
+        )
+
+    def delete(self, *, cluster_id: UUID, **context):
+        """Create a revision and durable command for asynchronous cluster deletion."""
+
+        return self.revise(
+            cluster_id=cluster_id,
+            spec=self._current_spec(cluster_id),
+            kind="DELETE",
+            reason="cluster deletion requested",
+            **context,
+        )
+
+    def _current_spec(self, cluster_id: UUID) -> ClusterSpec:
+        cluster = self.session.get(Cluster, cluster_id)
+        if cluster is None or cluster.deleted_at:
+            raise NotFound("cluster")
+        revision = self.session.scalar(
+            select(ClusterRevision).where(
+                ClusterRevision.cluster_id == cluster_id,
+                ClusterRevision.number == cluster.desired_revision,
+            )
+        )
+        return ClusterSpec.model_validate(revision.spec)
+
+    def _validate_node_profiles(
+        self, project_id: UUID, provider_reference_id: UUID, spec: ClusterSpec
+    ) -> None:
+        required = {
+            spec.control_plane.node_profile,
+            *(item.node_profile for item in spec.worker_node_types),
+        }
+        available = set(
+            self.session.scalars(
+                select(NodeProfile.name).where(
+                    NodeProfile.project_id == project_id,
+                    NodeProfile.provider_reference_id == provider_reference_id,
+                    NodeProfile.name.in_(required),
+                )
+            )
+        )
+        missing = sorted(required - available)
+        if missing:
+            raise NotFound(f"node profiles: {', '.join(missing)}")
 
     def _intent(
         self,
