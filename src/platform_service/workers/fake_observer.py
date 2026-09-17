@@ -12,6 +12,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import select
 
+from platform_service.domain.ports import CompilationContext
 from platform_service.domain.spec import ClusterSpec
 from platform_service.infrastructure.compiler import CapoCompiler
 from platform_service.infrastructure.database import (
@@ -19,9 +20,11 @@ from platform_service.infrastructure.database import (
     ClusterRevision,
     ClusterStatus,
     ConditionHistory,
+    NodeProfile,
     Operation,
     OperationStage,
     Project,
+    ProviderReference,
     ResourceStatus,
     SessionLocal,
 )
@@ -56,7 +59,22 @@ def observe_once() -> int:
                 )
             )
             spec = ClusterSpec.model_validate(revision.spec)
-            resources = CapoCompiler().compile(cluster.name, project.namespace, spec)
+            provider = session.get(ProviderReference, cluster.provider_reference_id)
+            profiles = session.scalars(
+                select(NodeProfile).where(
+                    NodeProfile.project_id == cluster.project_id,
+                    NodeProfile.provider_reference_id == cluster.provider_reference_id,
+                )
+            ).all()
+            resources = CapoCompiler().compile(
+                cluster.name,
+                project.namespace,
+                spec,
+                CompilationContext(
+                    provider=provider.configuration,
+                    node_profiles={profile.name: profile.specification for profile in profiles},
+                ),
+            )
             for pool in spec.worker_node_types:
                 resources.append(
                     {

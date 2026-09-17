@@ -147,8 +147,9 @@ change the requested field, and append a new immutable revision.
 ### Local simulated resources
 
 The fake plane creates observations for `Cluster`, `OpenStackCluster`,
-`KubeadmControlPlane`, `MachineDeployment`, `MachineSet`, `Machine`, and
-`OpenStackMachine`. Each observation contains its namespace/name/UID, generation,
+`KubeadmControlPlane`, `OpenStackMachineTemplate`, `KubeadmConfigTemplate`,
+`MachineDeployment`, `MachineHealthCheck`, optional `ClusterResourceSet`, `MachineSet`,
+`Machine`, and `OpenStackMachine`. Each observation contains its namespace/name/UID, generation,
 resource version, conditions, raw status, and observation time. Condition transitions
 are also written to history; normalized health remains a separate projection.
 
@@ -250,7 +251,9 @@ ClusterSpec
 ├── networking       # pod and service CIDRs
 ├── control_plane    # replicas and node profile
 ├── worker_node_types # named worker shapes, roles, replicas, profiles and labels
-├── scaling          # autoscaling intent/range
+├── scaling          # default autoscaling intent/range (overridable per worker type)
+├── machine_health_check # remediation policy, enabled with safe defaults
+├── addons           # references to pre-created ConfigMaps/Secrets
 └── features         # platform feature flags
 ```
 
@@ -346,7 +349,10 @@ Create:
       }
     ],
     "scaling": {"autoscaling": false},
-    "features": {"audit_logs": true, "metrics": true}
+    "features": {"audit_logs": true, "metrics": true},
+    "machine_health_check": {"enabled": true},
+    "addons": [{"name": "workload-cni", "kind": "ConfigMap"}],
+    "addon_strategy": "Reconcile"
   }
 }
 ```
@@ -354,12 +360,24 @@ Create:
 Each worker node type compiles to a CAPI `MachineDeployment`, plus its
 `KubeadmConfigTemplate` and `OpenStackMachineTemplate`. CAPI owns the corresponding
 `MachineSet` lifecycle; the platform does not create competing `MachineSet` objects.
+The control plane gets its own `OpenStackMachineTemplate`, referenced by the
+`KubeadmControlPlane`. The executor resolves referenced node profiles into CAPO flavor,
+image, root-volume, availability-zone, SSH-key, port, and server-group fields; missing or
+incomplete profiles fail compilation rather than producing an unusable machine template.
 The compiler derives the deployment selector and the
 `cluster.x-k8s.io/cluster-name`, `platform.example/worker-node-type`, and
 `node-role.kubernetes.io/<role>` labels. Those labels are reserved and rejected in
 caller-supplied `labels`. The old input key `worker_pools` remains accepted for stored
 revision and client compatibility, but new requests and serialized specs use
 `worker_node_types`.
+
+Machine health checks are enabled by default for control-plane and worker machines with
+a 10-minute startup timeout and five-minute `Ready=False`/`Unknown` thresholds. They can
+be disabled or tuned in `machine_health_check`. Autoscaling may be configured globally or
+per worker node type; enabled deployments receive Cluster Autoscaler min/max annotations
+and omit `spec.replicas` so the autoscaler owns that field. Addon references compile to a
+`ClusterResourceSet`; the referenced ConfigMaps or Secrets must already exist in the
+project namespace and contain valid addon manifests.
 
 Scale and upgrade:
 

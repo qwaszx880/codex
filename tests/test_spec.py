@@ -32,6 +32,24 @@ def test_rejects_duplicate_pool_names():
         ClusterSpec.model_validate(body)
 
 
+def test_rejects_replicas_outside_autoscaling_range():
+    body = valid()
+    body["worker_node_types"][0]["autoscaling"] = {
+        "autoscaling": True,
+        "min_replicas": 4,
+        "max_replicas": 10,
+    }
+    with pytest.raises(ValidationError, match="within autoscaling bounds"):
+        ClusterSpec.model_validate(body)
+
+
+def test_rejects_autoscaling_bounds_when_disabled():
+    body = valid()
+    body["scaling"] = {"min_replicas": 1, "max_replicas": 5}
+    with pytest.raises(ValidationError, match="require autoscaling"):
+        ClusterSpec.model_validate(body)
+
+
 def test_accepts_legacy_worker_pools_but_serializes_node_types():
     body = valid()
     body["worker_pools"] = body.pop("worker_node_types")

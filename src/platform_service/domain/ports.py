@@ -1,10 +1,19 @@
 """Replaceable repository, provider, messaging, metrics, and secret-store ports."""
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 from uuid import UUID
 
 from .spec import ClusterSpec
+
+
+@dataclass(frozen=True)
+class CompilationContext:
+    """Non-secret provider and machine-profile data resolved by an executor."""
+
+    provider: dict[str, Any] = field(default_factory=dict)
+    node_profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 class ClusterRepository(Protocol):
@@ -35,7 +44,13 @@ class TaskConsumer(Protocol):
 
 class ClusterCompiler(ABC):
     @abstractmethod
-    def compile(self, name: str, namespace: str, spec: ClusterSpec) -> list[dict[str, Any]]: ...
+    def compile(
+        self,
+        name: str,
+        namespace: str,
+        spec: ClusterSpec,
+        context: CompilationContext | None = None,
+    ) -> list[dict[str, Any]]: ...
 
 
 class ManagementClusterAdapter(Protocol):

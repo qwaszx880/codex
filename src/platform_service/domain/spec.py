@@ -12,6 +12,30 @@ class KubernetesSpec(BaseModel):
 class NetworkingSpec(BaseModel):
     pod_cidr: str = "10.244.0.0/16"
     service_cidr: str = "10.96.0.0/12"
+    node_cidr: str = "10.6.0.0/24"
+    dns_nameservers: list[str] = Field(default_factory=lambda: ["1.1.1.1", "8.8.8.8"])
+
+
+class ScalingSpec(BaseModel):
+    autoscaling: bool = False
+    min_replicas: int | None = Field(default=None, ge=0)
+    max_replicas: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def valid_range(self):
+        if self.autoscaling and (self.min_replicas is None or self.max_replicas is None):
+            raise ValueError("autoscaling requires min_replicas and max_replicas")
+        if not self.autoscaling and (
+            self.min_replicas is not None or self.max_replicas is not None
+        ):
+            raise ValueError("autoscaling bounds require autoscaling to be enabled")
+        if (
+            self.min_replicas is not None
+            and self.max_replicas is not None
+            and self.min_replicas > self.max_replicas
+        ):
+            raise ValueError("min_replicas cannot exceed max_replicas")
+        return self
 
 
 class WorkerNodeTypeSpec(BaseModel):
@@ -32,6 +56,7 @@ class WorkerNodeTypeSpec(BaseModel):
     )
     labels: dict[str, str] = Field(default_factory=dict)
     taints: list[str] = Field(default_factory=list)
+    autoscaling: ScalingSpec | None = None
 
     @model_validator(mode="after")
     def reserved_labels_are_derived(self):
@@ -49,24 +74,30 @@ class WorkerNodeTypeSpec(BaseModel):
 class ControlPlaneSpec(BaseModel):
     replicas: Annotated[int, Field(ge=1, le=9)] = 3
     node_profile: str
+    max_surge: Annotated[int, Field(ge=0, le=3)] = 1
 
 
-class ScalingSpec(BaseModel):
-    autoscaling: bool = False
-    min_replicas: int | None = Field(default=None, ge=0)
-    max_replicas: int | None = Field(default=None, ge=1)
+class UnhealthyConditionSpec(BaseModel):
+    type: str
+    status: Literal["True", "False", "Unknown"]
+    timeout: str = Field(pattern=r"^[1-9]\d*[smh]$")
 
-    @model_validator(mode="after")
-    def valid_range(self):
-        if self.autoscaling and (self.min_replicas is None or self.max_replicas is None):
-            raise ValueError("autoscaling requires min_replicas and max_replicas")
-        if (
-            self.min_replicas is not None
-            and self.max_replicas is not None
-            and self.min_replicas > self.max_replicas
-        ):
-            raise ValueError("min_replicas cannot exceed max_replicas")
-        return self
+
+class MachineHealthCheckSpec(BaseModel):
+    enabled: bool = True
+    max_unhealthy: str = "40%"
+    node_startup_timeout: str = Field(default="10m", pattern=r"^[1-9]\d*[smh]$")
+    unhealthy_conditions: list[UnhealthyConditionSpec] = Field(
+        default_factory=lambda: [
+            UnhealthyConditionSpec(type="Ready", status="False", timeout="5m"),
+            UnhealthyConditionSpec(type="Ready", status="Unknown", timeout="5m"),
+        ]
+    )
+
+
+class AddonReferenceSpec(BaseModel):
+    name: str = Field(min_length=1, max_length=253)
+    kind: Literal["ConfigMap", "Secret"] = "ConfigMap"
 
 
 class FeatureSpec(BaseModel):
@@ -84,6 +115,9 @@ class ClusterSpec(BaseModel):
     )
     scaling: ScalingSpec = Field(default_factory=ScalingSpec)
     features: FeatureSpec = Field(default_factory=FeatureSpec)
+    machine_health_check: MachineHealthCheckSpec = Field(default_factory=MachineHealthCheckSpec)
+    addons: list[AddonReferenceSpec] = Field(default_factory=list)
+    addon_strategy: Literal["ApplyOnce", "Reconcile"] = "Reconcile"
 
     @model_validator(mode="after")
     def unique_node_types(self):
@@ -92,6 +126,12 @@ class ClusterSpec(BaseModel):
             raise ValueError("worker node type names must be unique")
         if self.control_plane.replicas % 2 == 0:
             raise ValueError("control plane replicas must be odd")
+        for node_type in self.worker_node_types:
+            scaling = node_type.autoscaling or self.scaling
+            if scaling.autoscaling and not (
+                scaling.min_replicas <= node_type.replicas <= scaling.max_replicas
+            ):
+                raise ValueError("worker replicas must be within autoscaling bounds")
         return self
 
 
