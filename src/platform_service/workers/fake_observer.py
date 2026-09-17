@@ -57,7 +57,7 @@ def observe_once() -> int:
             )
             spec = ClusterSpec.model_validate(revision.spec)
             resources = CapoCompiler().compile(cluster.name, project.namespace, spec)
-            for pool in spec.worker_pools:
+            for pool in spec.worker_node_types:
                 resources.append(
                     {
                         "kind": "MachineSet",

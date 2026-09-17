@@ -9,6 +9,7 @@ from platform_service.infrastructure.database import (
     ManagementCluster,
     NodeProfile,
     Organization,
+    OrganizationMembership,
     Permission,
     Principal,
     Project,
@@ -26,6 +27,9 @@ IDS = {
     "management": UUID("40000000-0000-0000-0000-000000000001"),
     "provider": UUID("50000000-0000-0000-0000-000000000001"),
     "role": UUID("60000000-0000-0000-0000-000000000001"),
+    "operator_role": UUID("60000000-0000-0000-0000-000000000002"),
+    "viewer_role": UUID("60000000-0000-0000-0000-000000000003"),
+    "organization_admin_role": UUID("60000000-0000-0000-0000-000000000004"),
 }
 
 PERMISSIONS = (
@@ -39,6 +43,23 @@ PERMISSIONS = (
     "project.admin",
     "audit.read",
 )
+
+ROLE_GRANTS = {
+    "local-project-admin": ("project", PERMISSIONS),
+    "local-project-operator": (
+        "project",
+        ("cluster.create", "cluster.read", "cluster.scale", "cluster.upgrade"),
+    ),
+    "local-project-viewer": ("project", ("cluster.read",)),
+    "local-organization-admin": ("organization", PERMISSIONS),
+}
+
+ROLE_IDS = {
+    "local-project-admin": IDS["role"],
+    "local-project-operator": IDS["operator_role"],
+    "local-project-viewer": IDS["viewer_role"],
+    "local-organization-admin": IDS["organization_admin_role"],
+}
 
 
 def seed() -> None:
@@ -97,10 +118,13 @@ def seed() -> None:
                     configuration={"region": "local", "simulated": True},
                 )
             )
-        role = session.get(Role, IDS["role"])
-        if role is None:
-            role = Role(id=IDS["role"], name="local-project-admin", scope="project", builtin=True)
-            session.add(role)
+        roles = {}
+        for role_name, (scope, _) in ROLE_GRANTS.items():
+            role = session.get(Role, ROLE_IDS[role_name])
+            if role is None:
+                role = Role(id=ROLE_IDS[role_name], name=role_name, scope=scope, builtin=True)
+                session.add(role)
+            roles[role_name] = role
         session.flush()
         for permission_name in PERMISSIONS:
             permission = session.scalar(
@@ -112,19 +136,44 @@ def seed() -> None:
                 )
                 session.add(permission)
                 session.flush()
-            if session.get(RolePermission, (role.id, permission.id)) is None:
-                session.add(RolePermission(role_id=role.id, permission_id=permission.id))
+        for role_name, (_, grants) in ROLE_GRANTS.items():
+            role = roles[role_name]
+            for permission_name in grants:
+                permission = session.scalar(
+                    select(Permission).where(Permission.name == permission_name)
+                )
+                if session.get(RolePermission, (role.id, permission.id)) is None:
+                    session.add(RolePermission(role_id=role.id, permission_id=permission.id))
+        project_admin = roles["local-project-admin"]
         membership = session.scalar(
             select(ProjectMembership).where(
                 ProjectMembership.project_id == IDS["project"],
                 ProjectMembership.principal_id == IDS["principal"],
-                ProjectMembership.role_id == role.id,
+                ProjectMembership.role_id == project_admin.id,
             )
         )
         if membership is None:
             session.add(
                 ProjectMembership(
-                    project_id=IDS["project"], principal_id=IDS["principal"], role_id=role.id
+                    project_id=IDS["project"],
+                    principal_id=IDS["principal"],
+                    role_id=project_admin.id,
+                )
+            )
+        organization_admin = roles["local-organization-admin"]
+        organization_membership = session.scalar(
+            select(OrganizationMembership).where(
+                OrganizationMembership.organization_id == IDS["organization"],
+                OrganizationMembership.principal_id == IDS["principal"],
+                OrganizationMembership.role_id == organization_admin.id,
+            )
+        )
+        if organization_membership is None:
+            session.add(
+                OrganizationMembership(
+                    organization_id=IDS["organization"],
+                    principal_id=IDS["principal"],
+                    role_id=organization_admin.id,
                 )
             )
         for name, specification in {

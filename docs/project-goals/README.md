@@ -41,7 +41,7 @@ items are not claims of production readiness.
 ## Desired state and provider model
 
 11. **Stable `ClusterSpec`.** Users submit a platform-owned JSON contract containing
-    Kubernetes, networking, control-plane, worker-pool, scaling, and feature intent—not
+    Kubernetes, networking, control-plane, worker-node-type, scaling, and feature intent—not
     raw CAPI/CAPO YAML.
 12. **Layered validation.** Input passes JSON parsing, Pydantic validation, domain
     validation, then provider validation. Invalid combinations fail before compilation.
@@ -52,7 +52,8 @@ items are not claims of production readiness.
     delayed work can be classified as stale.
 15. **Compiler.** A `ClusterCompiler` translates validated `ClusterSpec` into resources
     such as `Cluster`, `OpenStackCluster`, `KubeadmControlPlane`, `MachineDeployment`,
-    and `OpenStackMachineTemplate`.
+    `KubeadmConfigTemplate`, and `OpenStackMachineTemplate`. A worker node type maps to
+    a `MachineDeployment`; CAPI, rather than the platform, owns its `MachineSet` rollout.
 16. **Provider abstraction.** CAPO/OpenStack is the first implementation behind a
     provider boundary, not a permanent coupling of the API or domain.
 17. **Node profiles.** Named profiles hide repeated provider details such as flavor,
@@ -253,7 +254,7 @@ state/health are separate concepts throughout the design.
 
 ## Implementation alignment review
 
-Review date: **2026-09-16**. Status meanings:
+Review date: **2026-09-17**. Status meanings:
 
 - **Implemented**: represented and exercised in the current local reference stack.
 - **Partial**: a model/interface or subset exists, but the production requirement is
@@ -264,12 +265,12 @@ Review date: **2026-09-16**. Status meanings:
 |---|---|---|---|
 | Central security boundary (1, 27–28, 87) | **Partial** | API has no Kubernetes client; executor calls a `ManagementClusterAdapter`; Compose uses the fake adapter. | Package/deploy a real in-cluster executor with scoped ServiceAccount/RBAC and a Kubernetes adapter. |
 | OIDC and principals (2–3) | **Implemented locally** | JWT/JWKS validation maps `(issuer, subject)` to the complete `Principal` record; Keycloak supplies local OIDC. | Add production IdP configuration/runbooks, key rotation and negative integration tests. |
-| Organizations, projects and IAM (4–8, 89) | **Partial** | Organization/project/member/role/permission tables, namespace mapping, bootstrap roles, and project permission lookup exist. | Add administration APIs, organization-scope authorization, service-principal flows, policy tests, and tenancy enforcement for every future endpoint. |
+| Organizations, projects and IAM (4–8, 89) | **Partial** | Organization/project/member/role/permission tables and namespace mapping exist. Effective RBAC unions scoped project and inherited organization grants; authenticated users can inspect their principal and visible projects, while project administrators can list roles/members and add or remove project assignments. Local bootstrap includes viewer, operator, project-admin, and organization-admin roles. | Add organization/project creation APIs, organization-membership administration, service-principal flows, richer policy/audit tests, and tenancy enforcement for every future endpoint. |
 | Audit (9) | **Partial** | Mutation intent records the required audit fields separately from logs. | Add authorized audit read API, rejected-attempt auditing, retention/export policy, and wider action coverage. |
 | Authoritative schema (10, 53–54) | **Partial** | SQLAlchemy and Alembic define the principal core tables, including management clusters and executor instances; current resource conditions are embedded in `resource_status` with transitions in `condition_history`. | Decide whether a separate `resource_conditions` relation is required, expand migrations as features mature, and add migration upgrade/downgrade integration tests. |
-| ClusterSpec and validation (11–12) | **Partial** | Stable Pydantic models enforce structural and selected domain rules before compilation. | Add an explicit provider-validation service and richer cross-field/provider capability validation. |
+| ClusterSpec and validation (11–12) | **Partial** | Stable Pydantic models describe worker node types and enforce structural, uniqueness, role, and compiler-owned-label rules before compilation; legacy `worker_pools` input remains readable. | Add an explicit provider-validation service and richer cross-field/provider capability validation. |
 | Revisions (13–14, 57–59) | **Partial** | Create, scale and upgrade append specs and track desired/applied/observed revisions; stale commands are rejected. | Add general update and node-profile-change use cases plus stronger concurrent mutation tests. |
-| Compiler/provider abstraction (15–19, 90) | **Partial** | `ClusterCompiler`, `ManagementClusterAdapter`, and `SecretStore` ports exist; CAPO compiler emits core resources; node profile/provider-reference tables store secret references. | Resolve profiles during compilation, implement a real Kubernetes/CAPO adapter and secret-store adapter, and add a second-provider contract test. |
+| Compiler/provider abstraction (15–19, 90) | **Partial** | `ClusterCompiler`, `ManagementClusterAdapter`, and `SecretStore` ports exist; each worker node type compiles to a selector-compatible `MachineDeployment`, `KubeadmConfigTemplate`, and `OpenStackMachineTemplate`, with role/ownership labels derived consistently. Node profile/provider-reference tables store secret references. | Resolve profile contents into complete CAPO machine templates, implement a real Kubernetes/CAPO adapter and secret-store adapter, and add a second-provider contract test. |
 | Transactional outbox (20–22) | **Implemented locally** | Mutation rows commit together; publisher uses confirms, retries, claim metadata, stale-claim recovery and `FOR UPDATE SKIP LOCKED`. | Add crash-window/integration tests and production observability; document the unavoidable confirm/DB-update duplicate window. |
 | Messaging and Celery (23–26, 34–36) | **Partial** | Management-cluster routing, late ack, quorum queue arguments, DLX metadata, bounded retries, classifications, and a thin task exist. | Bind/configure and exercise an actual dead-letter queue; move publisher use behind the declared port; persist terminal task failure consistently. |
 | Executor safety (29–33) | **Partial** | Celery can scale, processed-event IDs provide idempotency, target revision is checked, and leases are per cluster. | Make lease acquisition atomic under contention, define renewal/release semantics, and add database-backed multi-worker concurrency tests. |

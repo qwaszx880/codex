@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 
 class KubernetesSpec(BaseModel):
@@ -14,12 +14,36 @@ class NetworkingSpec(BaseModel):
     service_cidr: str = "10.96.0.0/12"
 
 
-class MachinePoolSpec(BaseModel):
+class WorkerNodeTypeSpec(BaseModel):
+    """A homogeneous worker group managed by one CAPI MachineDeployment.
+
+    CAPI creates and rolls the underlying MachineSets.  Role and ownership labels are
+    derived by the compiler so callers cannot accidentally break its selectors.
+    """
+
     name: str = Field(min_length=1, max_length=63, pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
     replicas: Annotated[int, Field(ge=0, le=1000)]
     node_profile: str = Field(min_length=1)
+    role: str = Field(
+        default="worker",
+        min_length=1,
+        max_length=63,
+        pattern=r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+    )
     labels: dict[str, str] = Field(default_factory=dict)
     taints: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def reserved_labels_are_derived(self):
+        reserved = {
+            "cluster.x-k8s.io/cluster-name",
+            "platform.example/worker-node-type",
+        }
+        if reserved.intersection(self.labels) or any(
+            key.startswith("node-role.kubernetes.io/") for key in self.labels
+        ):
+            raise ValueError("CAPI ownership, worker-node-type, and role labels are derived")
+        return self
 
 
 class ControlPlaneSpec(BaseModel):
@@ -54,15 +78,18 @@ class ClusterSpec(BaseModel):
     kubernetes: KubernetesSpec
     networking: NetworkingSpec = Field(default_factory=NetworkingSpec)
     control_plane: ControlPlaneSpec
-    worker_pools: list[MachinePoolSpec] = Field(min_length=1)
+    worker_node_types: list[WorkerNodeTypeSpec] = Field(
+        min_length=1,
+        validation_alias=AliasChoices("worker_node_types", "worker_pools"),
+    )
     scaling: ScalingSpec = Field(default_factory=ScalingSpec)
     features: FeatureSpec = Field(default_factory=FeatureSpec)
 
     @model_validator(mode="after")
-    def unique_pools(self):
-        names = [pool.name for pool in self.worker_pools]
+    def unique_node_types(self):
+        names = [node_type.name for node_type in self.worker_node_types]
         if len(names) != len(set(names)):
-            raise ValueError("worker pool names must be unique")
+            raise ValueError("worker node type names must be unique")
         if self.control_plane.replicas % 2 == 0:
             raise ValueError("control plane replicas must be odd")
         return self

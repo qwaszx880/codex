@@ -171,6 +171,16 @@ client
 No password is sent to or stored by the platform API. The local bootstrap principal's
 external subject is deliberately the same UUID as the imported Keycloak user's ID.
 
+Effective project permissions are the union of direct project-role grants and
+organization-role grants inherited by projects in that organization. Role scope is
+checked while resolving permissions: organization roles cannot be attached as project
+memberships, and project roles do not become organization-wide. The local seed provides
+project viewer, operator, and administrator roles plus an organization administrator.
+Principals are mapped from validated OIDC `(issuer, sub)` claims; membership APIs use
+persisted principal IDs and never store passwords or bearer tokens.
+Membership changes and their security audit event commit in the same database
+transaction and retain the actor, target principal, role, project, and request ID.
+
 ### Mutation and dispatch flow
 
 ```text
@@ -239,7 +249,7 @@ ClusterSpec
 ├── kubernetes       # Kubernetes version
 ├── networking       # pod and service CIDRs
 ├── control_plane    # replicas and node profile
-├── worker_pools     # named pools, replicas, profiles, labels and taints
+├── worker_node_types # named worker shapes, roles, replicas, profiles and labels
 ├── scaling          # autoscaling intent/range
 └── features         # platform feature flags
 ```
@@ -256,10 +266,16 @@ when absent and records it with operations/audit events.
 
 | Method | Path | Permission | Behavior |
 |---|---|---|---|
+| `GET` | `/v1/principals/me` | authenticated | Read the current OIDC-backed platform principal |
+| `GET` | `/v1/projects` | authenticated | List projects visible through direct or organization membership |
+| `GET` | `/v1/projects/{project_id}/roles` | `project.admin` | List assignable project roles and grants |
+| `GET` | `/v1/projects/{project_id}/members` | `project.admin` | List project principals and role assignments |
+| `POST` | `/v1/projects/{project_id}/members` | `project.admin` | Assign a project role to an enabled principal (`201`) |
+| `DELETE` | `/v1/projects/{project_id}/members/{principal_id}/roles/{role_id}` | `project.admin` | Remove one project role assignment (`204`) |
 | `POST` | `/v1/clusters` | `cluster.create` | Create revision 1 and return an accepted operation (`202`) |
 | `GET` | `/v1/clusters?project_id={uuid}` | `cluster.read` | List non-deleted project clusters |
 | `GET` | `/v1/clusters/{cluster_id}` | `cluster.read` | Read revision pointers and cluster metadata |
-| `POST` | `/v1/clusters/{cluster_id}/scale` | `cluster.scale` | Change one worker-pool replica count in a new revision (`202`) |
+| `POST` | `/v1/clusters/{cluster_id}/scale` | `cluster.scale` | Change one worker-node-type replica count in a new revision (`202`) |
 | `POST` | `/v1/clusters/{cluster_id}/upgrade` | `cluster.upgrade` | Change Kubernetes version in a new revision (`202`) |
 | `GET` | `/v1/clusters/{cluster_id}/revisions` | `cluster.read` | Return immutable desired-state history |
 | `GET` | `/v1/clusters/{cluster_id}/operations` | `cluster.read` | Return operation history newest first |
@@ -300,7 +316,7 @@ Common responses:
 | `202` | intent accepted asynchronously | create, scale, or upgrade transaction committed |
 | `401` | token invalid | bad signature, issuer, audience, expiry, or missing bearer token |
 | `403` | authenticated but forbidden | disabled principal or missing project permission |
-| `404` | tenant-visible object missing | unknown cluster, project, management target, or worker pool |
+| `404` | tenant-visible object missing | unknown cluster, project, management target, or worker node type |
 | `422` | request validation failed | invalid version, replicas, name, autoscaling range, or duplicate pools |
 
 Pydantic error responses identify the failing JSON location. Domain/provider validation
@@ -320,12 +336,30 @@ Create:
     "kubernetes": {"version": "v1.31.1"},
     "networking": {"pod_cidr": "10.244.0.0/16", "service_cidr": "10.96.0.0/12"},
     "control_plane": {"replicas": 3, "node_profile": "control"},
-    "worker_pools": [{"name": "workers", "replicas": 3, "node_profile": "compute"}],
+    "worker_node_types": [
+      {
+        "name": "general",
+        "role": "worker",
+        "replicas": 3,
+        "node_profile": "compute",
+        "labels": {"workload.example/tier": "general"}
+      }
+    ],
     "scaling": {"autoscaling": false},
     "features": {"audit_logs": true, "metrics": true}
   }
 }
 ```
+
+Each worker node type compiles to a CAPI `MachineDeployment`, plus its
+`KubeadmConfigTemplate` and `OpenStackMachineTemplate`. CAPI owns the corresponding
+`MachineSet` lifecycle; the platform does not create competing `MachineSet` objects.
+The compiler derives the deployment selector and the
+`cluster.x-k8s.io/cluster-name`, `platform.example/worker-node-type`, and
+`node-role.kubernetes.io/<role>` labels. Those labels are reserved and rejected in
+caller-supplied `labels`. The old input key `worker_pools` remains accepted for stored
+revision and client compatibility, but new requests and serialized specs use
+`worker_node_types`.
 
 Scale and upgrade:
 
@@ -399,6 +433,8 @@ in provider configuration, audit details, API responses, or ordinary application
 │   │   └── errors.py            # reconciliation error classifications
 │   ├── application/
 │   │   ├── cluster_service.py   # transactional intent and revision use cases
+│   │   ├── errors.py            # expected application failure vocabulary
+│   │   ├── iam_service.py       # project membership and RBAC use cases
 │   │   └── reconciliation.py    # idempotent, leased command processor
 │   ├── infrastructure/
 │   │   ├── database.py          # SQLAlchemy authoritative-state mappings
@@ -412,6 +448,7 @@ in provider configuration, audit details, API responses, or ordinary application
 │       ├── fake_observer.py     # local CAPI/CAPO simulation
 │       └── heartbeat.py         # executor presence/version reporting
 └── tests/
+    ├── test_iam.py
     ├── test_spec.py
     ├── test_compiler.py
     └── test_local_stack.py
@@ -433,6 +470,7 @@ routes and Celery task functions.
 | `domain/ports.py` | replaceable boundary protocols | concrete SQLAlchemy/Kubernetes clients |
 | `domain/errors.py` | shared retry/error classification vocabulary | transport-specific retry loops |
 | `application/cluster_service.py` | create/revise/scale use cases and atomic intent | HTTP or Celery framework code |
+| `application/iam_service.py` | project membership and visible-project RBAC use cases | token verification or HTTP serialization |
 | `application/reconciliation.py` | idempotency, staleness, lease and command orchestration | long-running observer loops |
 | `infrastructure/database.py` | SQLAlchemy persistence mappings and session factory | API serialization |
 | `infrastructure/auth.py` | token verification, principal mapping, permission lookup | passwords or Kubernetes RBAC |
@@ -550,7 +588,7 @@ OPERATION=$(curl -fsS "$PLATFORM_URL/v1/clusters" \
     "spec":{
       "kubernetes":{"version":"v1.31.1"},
       "control_plane":{"replicas":3,"node_profile":"control"},
-      "worker_pools":[{"name":"workers","replicas":3,"node_profile":"compute"}]
+      "worker_node_types":[{"name":"workers","role":"worker","replicas":3,"node_profile":"compute"}]
     }
   }')
 echo "$OPERATION"
