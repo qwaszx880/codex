@@ -50,18 +50,82 @@ class CapoCompiler(ClusterCompiler):
                 {"replicas": spec.control_plane.replicas, "version": spec.kubernetes.version},
             ),
         ]
-        for pool in spec.worker_pools:
+        for node_type in spec.worker_node_types:
+            deployment_name = f"{name}-{node_type.name}"
+            worker_labels = {
+                **node_type.labels,
+                "cluster.x-k8s.io/cluster-name": name,
+                "platform.example/worker-node-type": node_type.name,
+                f"node-role.kubernetes.io/{node_type.role}": "",
+            }
+            resources.extend(
+                [
+                    obj(
+                        "bootstrap.cluster.x-k8s.io/v1beta1",
+                        "KubeadmConfigTemplate",
+                        deployment_name,
+                        {
+                            "template": {
+                                "spec": {
+                                    "joinConfiguration": {
+                                        "nodeRegistration": {
+                                            "name": "{{ local_hostname }}",
+                                            "kubeletExtraArgs": {
+                                                "node-labels": ",".join(
+                                                    f"{key}={value}"
+                                                    for key, value in worker_labels.items()
+                                                )
+                                            },
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                    ),
+                    obj(
+                        "infrastructure.cluster.x-k8s.io/v1beta1",
+                        "OpenStackMachineTemplate",
+                        deployment_name,
+                        {
+                            "template": {
+                                "metadata": {
+                                    "annotations": {
+                                        "platform.example/node-profile": node_type.node_profile
+                                    }
+                                },
+                                "spec": {},
+                            }
+                        },
+                    ),
+                ]
+            )
             resources.append(
                 obj(
                     "cluster.x-k8s.io/v1beta1",
                     "MachineDeployment",
-                    f"{name}-{pool.name}",
+                    deployment_name,
                     {
                         "clusterName": name,
-                        "replicas": pool.replicas,
+                        "replicas": node_type.replicas,
+                        "selector": {"matchLabels": worker_labels},
                         "template": {
-                            "metadata": {"labels": pool.labels},
-                            "spec": {"version": spec.kubernetes.version},
+                            "metadata": {"labels": worker_labels},
+                            "spec": {
+                                "clusterName": name,
+                                "version": spec.kubernetes.version,
+                                "bootstrap": {
+                                    "configRef": {
+                                        "apiVersion": "bootstrap.cluster.x-k8s.io/v1beta1",
+                                        "kind": "KubeadmConfigTemplate",
+                                        "name": deployment_name,
+                                    }
+                                },
+                                "infrastructureRef": {
+                                    "apiVersion": "infrastructure.cluster.x-k8s.io/v1beta1",
+                                    "kind": "OpenStackMachineTemplate",
+                                    "name": deployment_name,
+                                },
+                            },
                         },
                     },
                 )

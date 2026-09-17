@@ -1,6 +1,5 @@
 """Transactional application use cases for cluster desired-state mutations."""
 
-from copy import deepcopy
 from uuid import UUID
 
 from sqlalchemy import select
@@ -153,10 +152,15 @@ class ClusterService:
                 ClusterRevision.number == cluster.desired_revision,
             )
         ).scalar_one()
-        data = deepcopy(current.spec)
-        target = next((p for p in data["worker_pools"] if p["name"] == pool), None)
+        # Normalize revisions written with the legacy ``worker_pools`` key before
+        # selecting a node type, then persist only the canonical contract.
+        data = ClusterSpec.model_validate(current.spec).model_dump(mode="json")
+        target = next(
+            (node_type for node_type in data["worker_node_types"] if node_type["name"] == pool),
+            None,
+        )
         if target is None:
-            raise NotFound("worker pool")
+            raise NotFound("worker node type")
         target["replicas"] = replicas
         return self.revise(
             cluster_id=cluster_id,
@@ -178,7 +182,7 @@ class ClusterService:
                 ClusterRevision.number == cluster.desired_revision,
             )
         )
-        data = deepcopy(current.spec)
+        data = ClusterSpec.model_validate(current.spec).model_dump(mode="json")
         data["kubernetes"]["version"] = version
         return self.revise(
             cluster_id=cluster_id,
