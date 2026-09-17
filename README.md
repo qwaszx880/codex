@@ -449,7 +449,9 @@ in provider configuration, audit details, API responses, or ordinary application
 ├── alembic/
 │   ├── env.py                   # Alembic runtime configuration
 │   └── versions/0001_initial.py # initial authoritative platform schema
-├── dev/keycloak/realm.json      # imported local realm, client and developer user
+├── dev/
+│   ├── frontend/oidc-config.example.json # browser frontend OIDC/API settings
+│   └── keycloak/realm.json      # imported local realm, clients and developer user
 ├── src/platform_service/
 │   ├── main.py                  # FastAPI application assembly
 │   ├── config.py                # environment-backed settings
@@ -590,6 +592,27 @@ TOKEN=$(curl -fsS -X POST \
 Using Python for JSON extraction is optional and happens on the host in this example.
 If you want a strictly Docker-only token extraction, save the response and paste the
 `access_token`, or use the API docs after obtaining a token through your preferred tool.
+
+### Browser frontend login
+
+The imported realm also contains the public `cluster-platform-frontend` client for a
+browser-based frontend served from `http://localhost:3000` (or
+`http://127.0.0.1:3000`). It uses the OIDC authorization-code flow with PKCE; it has no
+client secret, disables the password and implicit grants, and adds the
+`cluster-platform` audience required by the API to access tokens.
+
+Pass [`dev/frontend/oidc-config.example.json`](dev/frontend/oidc-config.example.json)
+to an OIDC client library, or expose the equivalent values through the frontend's
+public runtime configuration. The frontend should redirect to Keycloak for login,
+handle the configured `/auth/callback`, and send the resulting access token as
+`Authorization: Bearer <token>` when calling `api_base_url`. Do not send the ID token
+to the API, and do not add a client secret to browser code.
+
+The example URLs are deliberately fixed to the local development origins allowed by
+the imported client. When the frontend runs on another origin, update `redirectUris`,
+`webOrigins`, and `post.logout.redirect.uris` in `dev/keycloak/realm.json`, then update
+the matching frontend values before importing a fresh realm. Use exact trusted HTTPS
+origins and production identity-provider configuration outside local development.
 
 The seeded IDs are stable:
 
